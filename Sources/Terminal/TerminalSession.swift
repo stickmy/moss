@@ -1,0 +1,165 @@
+import Foundation
+
+@MainActor
+@Observable
+final class TerminalSession: Identifiable {
+    let id: UUID
+    let terminalApp: MossTerminalApp
+    let socketPath: String
+    var title: String = ""
+    var status: TerminalStatus = .none
+    var isFocused: Bool = false
+    var workingDirectory: String = "~"
+    var gitBranch: String?
+    var onClose: (() -> Void)?
+    private nonisolated(unsafe) var gitWatcher: DispatchSourceFileSystemObject?
+
+    /// Per-session file tree state (expansion, selected file) — persists across focus switches.
+    private var _fileTreeModel: FileTreeModel?
+    var fileTreeModel: FileTreeModel {
+        if let m = _fileTreeModel { return m }
+        let m = FileTreeModel(rootPath: workingDirectory)
+        _fileTreeModel = m
+        return m
+    }
+
+    init(terminalApp: MossTerminalApp, socketPath: String) {
+        self.id = UUID()
+        self.terminalApp = terminalApp
+        self.socketPath = socketPath
+    }
+
+    deinit {
+        gitWatcher?.cancel()
+    }
+
+    /// Fallback PWD tracking from terminal title (used when OSC 7 is unavailable).
+    func syncState(fromTitle title: String) {
+        guard !title.isEmpty else { return }
+        self.title = title
+        if let pwdFromTitle = parsePwdFromTitle(title) {
+            updatePwd(pwdFromTitle)
+        }
+    }
+
+    /// Update working directory and trigger git branch refresh.
+    func updatePwd(_ pwd: String) {
+        guard pwd != workingDirectory else { return }
+        workingDirectory = pwd
+        fileTreeModel.updateRootPath(pwd)
+        updateGitBranch()
+        watchGitHead()
+    }
+
+    private func parsePwdFromTitle(_ title: String) -> String? {
+        // Common formats: "user@host:~/path", "~/path", "/absolute/path"
+        if title.contains(":") {
+            let parts = title.components(separatedBy: ":")
+            if let path = parts.last, (path.hasPrefix("~") || path.hasPrefix("/")) {
+                return path.trimmingCharacters(in: .whitespaces)
+            }
+        }
+        if title.hasPrefix("~") || title.hasPrefix("/") {
+            return title.trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    func updateGitBranch() {
+        let dir = workingDirectory.replacingOccurrences(of: "~", with: NSHomeDirectory())
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let pipe = Pipe()
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["rev-parse", "--abbrev-ref", "HEAD"]
+            process.currentDirectoryURL = URL(fileURLWithPath: dir)
+            process.standardOutput = pipe
+            process.standardError = Pipe()
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let branch = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                DispatchQueue.main.async {
+                    self?.gitBranch = (branch?.isEmpty ?? true) ? nil : branch
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.gitBranch = nil
+                }
+            }
+        }
+    }
+
+    private func watchGitHead() {
+        gitWatcher?.cancel()
+        gitWatcher = nil
+
+        let dir = workingDirectory.replacingOccurrences(of: "~", with: NSHomeDirectory())
+        let gitHeadPath = (dir as NSString).appendingPathComponent(".git/HEAD")
+
+        guard FileManager.default.fileExists(atPath: gitHeadPath) else { return }
+
+        let fd = open(gitHeadPath, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename],
+            queue: .global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            DispatchQueue.main.async {
+                self?.updateGitBranch()
+            }
+        }
+        source.setCancelHandler {
+            close(fd)
+        }
+        source.resume()
+        gitWatcher = source
+    }
+}
+
+// MARK: - MossSurfaceViewDelegate
+
+extension TerminalSession: MossSurfaceViewDelegate {
+    func surfaceDidChangeTitle(_ title: String) {
+        // Reject titles with control characters (uninitialized/garbled data)
+        guard !title.isEmpty, title.allSatisfy({ !$0.isASCII || $0.asciiValue! >= 0x20 || $0 == "\t" }) else {
+            return
+        }
+        self.title = title
+        // Fallback: try to extract PWD from title when OSC 7 is not available
+        if let pwd = parsePwdFromTitle(title) {
+            updatePwd(pwd)
+        }
+    }
+
+    func surfaceDidChangePwd(_ pwd: String) {
+        print("[Session] surfaceDidChangePwd: \(pwd)")
+        // Validate: must be a real path, no control characters
+        guard !pwd.isEmpty,
+              pwd.hasPrefix("/") || pwd.hasPrefix("~"),
+              pwd.allSatisfy({ !$0.isASCII || $0.asciiValue! >= 0x20 })
+        else { return }
+        updatePwd(pwd)
+    }
+
+    func surfaceDidChangeFocus(_ focused: Bool) {
+        isFocused = focused
+    }
+
+    func surfaceDidClose(processAlive: Bool) {
+        NotificationCenter.default.post(
+            name: .terminalSessionClosed,
+            object: self
+        )
+        onClose?()
+    }
+}
+
+extension Notification.Name {
+    static let terminalSessionClosed = Notification.Name("terminalSessionClosed")
+}

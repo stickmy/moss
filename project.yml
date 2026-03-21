@@ -1,0 +1,59 @@
+name: Moss
+options:
+  bundleIdPrefix: dev.moss
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  libghostty-spm:
+    url: https://github.com/Lakr233/libghostty-spm.git
+    branch: main
+  Highlightr:
+    url: https://github.com/raspu/Highlightr.git
+    from: "2.2.1"
+
+targets:
+  Moss:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+        excludes:
+          - MossCLI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.moss.app
+        PRODUCT_NAME: Moss
+        SWIFT_VERSION: "5.10"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_FILE: Supporting/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Supporting/Moss.entitlements
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_APP_SANDBOX: false
+        ENABLE_HARDENED_RUNTIME: true
+        OTHER_LDFLAGS: "-lc++"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
+        INFOPLIST_KEY_CFBundleDisplayName: Moss
+    dependencies:
+      - package: libghostty-spm
+        product: GhosttyKit
+      - package: Highlightr
+      - sdk: Cocoa.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+
+  MossCLI:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/MossCLI
+    settings:
+      base:
+        PRODUCT_NAME: moss
+        SWIFT_VERSION: "5.10"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
