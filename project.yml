@@ -10,9 +10,12 @@ packages:
   libghostty-spm:
     url: https://github.com/Lakr233/libghostty-spm.git
     branch: main
-  Highlightr:
-    url: https://github.com/raspu/Highlightr.git
-    from: "2.2.1"
+  STTextView:
+    url: https://github.com/krzyzanowskim/STTextView.git
+    from: "2.2.2"
+  STTextView-Plugin-Neon:
+    url: https://github.com/krzyzanowskim/STTextView-Plugin-Neon.git
+    branch: main
 
 targets:
   Moss:
@@ -22,6 +25,12 @@ targets:
       - path: Sources
         excludes:
           - MossCLI
+      - path: Resources/ghostty
+        buildPhase: resources
+        type: folder
+      - path: Resources/terminfo
+        buildPhase: resources
+        type: folder
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.moss.app
@@ -40,9 +49,13 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
         INFOPLIST_KEY_CFBundleDisplayName: Moss
     dependencies:
+      - target: MossCLI
       - package: libghostty-spm
         product: GhosttyKit
-      - package: Highlightr
+      - package: STTextView
+        product: STTextView
+      - package: STTextView-Plugin-Neon
+        product: STTextView-Plugin-Neon
       - sdk: Cocoa.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework

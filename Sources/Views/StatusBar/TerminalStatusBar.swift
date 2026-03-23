@@ -21,6 +21,7 @@ struct TerminalStatusBar: View {
             Spacer()
 
             StatusIndicator(status: session.status)
+                .id(session.status.rawValue)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -38,18 +39,9 @@ struct TerminalStatusBar: View {
 
 struct StatusIndicator: View {
     let status: TerminalStatus
-    @State private var pulse = false
 
     var body: some View {
         switch status {
-        case .running:
-            Circle()
-                .fill(.blue)
-                .frame(width: 8, height: 8)
-                .scaleEffect(pulse ? 1.3 : 1.0)
-                .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
-                .onAppear { pulse = true }
-
         case .pending:
             Circle()
                 .fill(.orange)

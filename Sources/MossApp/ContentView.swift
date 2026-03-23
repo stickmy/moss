@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var zoomedSession: TerminalSession?
     @State private var showFileTree = false
     @State private var fileTreeSession: TerminalSession?
+    @State private var lastFocusedSessionId: UUID?
     @State private var fileTreeWidth: CGFloat = 220
     @State private var previewPanelWidth: CGFloat = 500
     @State private var dragOffsetTree: CGFloat = 0
@@ -14,6 +15,21 @@ struct ContentView: View {
 
     private var focusedSession: TerminalSession? {
         sessionManager.sessions.first(where: { $0.isFocused })
+    }
+
+    /// Stable focus fallback used for appearance while focus is temporarily nil.
+    private var appearanceFocusedSessionId: UUID? {
+        if let focusedId = focusedSession?.id {
+            return focusedId
+        }
+
+        guard let lastFocusedSessionId,
+              sessionManager.sessions.contains(where: { $0.id == lastFocusedSessionId })
+        else {
+            return nil
+        }
+
+        return lastFocusedSessionId
     }
 
     /// Stable session for file tree — updated only when a terminal gains focus.
@@ -25,9 +41,10 @@ struct ContentView: View {
         HStack(spacing: 0) {
             if showFileTree, let session = activeFileTreeSession {
                 FileTreeView(model: session.fileTreeModel)
-                    .frame(width: fileTreeWidth + dragOffsetTree)
+                    .frame(width: fileTreeWidth)
 
                 PaneDivider(
+                    offset: dragOffsetTree,
                     onDrag: { delta in
                         dragOffsetTree = max(180 - fileTreeWidth, min(350 - fileTreeWidth, delta))
                     },
@@ -43,9 +60,10 @@ struct ContentView: View {
                     ) {
                         session.fileTreeModel.selectedFile = nil
                     }
-                    .frame(width: previewPanelWidth + dragOffsetPreview)
+                    .frame(width: previewPanelWidth)
 
                     PaneDivider(
+                        offset: dragOffsetPreview,
                         onDrag: { delta in
                             dragOffsetPreview = max(300 - previewPanelWidth, min(800 - previewPanelWidth, delta))
                         },
@@ -78,6 +96,7 @@ struct ContentView: View {
             if let id = notif.userInfo?["sessionId"] as? UUID,
                let s = sessionManager.sessions.first(where: { $0.id == id })
             {
+                lastFocusedSessionId = id
                 fileTreeSession = s
             }
         }
@@ -89,12 +108,14 @@ struct ContentView: View {
         GeometryReader { geo in
             let sessions = sessionManager.sessions
             let isZoomed = zoomedSession != nil
+            let appearanceFocusedSessionId = appearanceFocusedSessionId
             let layout = GridLayout(count: sessions.count, size: geo.size)
 
             ZStack {
                 ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                     TerminalCell(
                         session: session,
+                        appearanceFocusedSessionId: appearanceFocusedSessionId,
                         isZoomed: zoomedSession?.id == session.id,
                         anyZoomed: isZoomed,
                         sessionCount: sessions.count,
@@ -207,13 +228,16 @@ struct ContentView: View {
     // MARK: - Grid Layout
 
     struct GridLayout {
+        let count: Int
         let columns: Int
         let rows: Int
-        let cellSize: CGSize
+        let size: CGSize
         let spacing: CGFloat = 2
         let padding: CGFloat = 2
 
         init(count: Int, size: CGSize) {
+            self.count = count
+            self.size = size
             let cols: Int
             switch count {
             case 0 ... 1: cols = 1
@@ -225,22 +249,33 @@ struct ContentView: View {
             }
             self.columns = cols
             self.rows = max(1, Int(ceil(Double(count) / Double(cols))))
-            let totalH = padding * 2 + spacing * CGFloat(max(cols - 1, 0))
+        }
+
+        private func itemCount(inRow row: Int) -> Int {
+            guard row >= 0, row < rows else { return 0 }
+            guard row == rows - 1 else { return columns }
+
+            let remainder = count % columns
+            return remainder == 0 ? columns : remainder
+        }
+
+        private var rowHeight: CGFloat {
             let totalV = padding * 2 + spacing * CGFloat(max(rows - 1, 0))
-            self.cellSize = CGSize(
-                width: max(100, (size.width - totalH) / CGFloat(cols)),
-                height: max(100, (size.height - totalV) / CGFloat(rows))
-            )
+            return max(100, (size.height - totalV) / CGFloat(rows))
         }
 
         func frame(for index: Int) -> CGRect {
+            let row = max(0, min(rows - 1, index / columns))
             let col = index % columns
-            let row = index / columns
+            let itemsInRow = max(1, itemCount(inRow: row))
+            let totalH = padding * 2 + spacing * CGFloat(max(itemsInRow - 1, 0))
+            let cellWidth = max(100, (size.width - totalH) / CGFloat(itemsInRow))
+
             return CGRect(
-                x: padding + CGFloat(col) * (cellSize.width + spacing),
-                y: padding + CGFloat(row) * (cellSize.height + spacing),
-                width: cellSize.width,
-                height: cellSize.height
+                x: padding + CGFloat(col) * (cellWidth + spacing),
+                y: padding + CGFloat(row) * (rowHeight + spacing),
+                width: cellWidth,
+                height: rowHeight
             )
         }
     }
@@ -250,12 +285,17 @@ struct ContentView: View {
 
 struct TerminalCell: View {
     @Bindable var session: TerminalSession
+    @Environment(\.mossTheme) private var theme
+    let appearanceFocusedSessionId: UUID?
     let isZoomed: Bool
     let anyZoomed: Bool
     let sessionCount: Int
     let frame: CGRect
 
     private var visible: Bool { !anyZoomed || isZoomed }
+    private var isAppearanceFocused: Bool {
+        session.isFocused || appearanceFocusedSessionId == session.id
+    }
 
     var body: some View {
         StableTerminalWrapper(session: session, isActive: visible)
@@ -268,9 +308,14 @@ struct TerminalCell: View {
                 }
             }
             .overlay {
-                if visible && !session.isFocused && !anyZoomed && sessionCount > 1 {
-                    Color.black.opacity(0.3)
+                if visible && !isAppearanceFocused && !anyZoomed && sessionCount > 1,
+                   let theme,
+                   theme.unfocusedSplitOpacity > 0
+                {
+                    Rectangle()
+                        .fill(theme.unfocusedSplitFill)
                         .allowsHitTesting(false)
+                        .opacity(theme.unfocusedSplitOpacity)
                 }
             }
             .position(x: frame.midX, y: frame.midY)
@@ -310,23 +355,39 @@ private struct ThemedWindowConfigurator: NSViewRepresentable {
 }
 
 struct PaneDivider: View {
+    private enum Metrics {
+        static let visualWidth: CGFloat = 1
+        static let interactionWidth: CGFloat = 11
+    }
+
+    var offset: CGFloat = 0
     let onDrag: (_ totalDelta: CGFloat) -> Void
     let onDragEnd: () -> Void
     @Environment(\.mossTheme) private var theme
+    @State private var isShowingResizeCursor = false
 
     var body: some View {
-        Rectangle()
-            .fill(theme?.border ?? Color(nsColor: .separatorColor))
-            .frame(width: 1)
-            .padding(.horizontal, 2)
-            .frame(width: 5)
+        ZStack {
+            Rectangle()
+                .fill(theme?.border ?? Color(nsColor: .separatorColor))
+                .frame(width: Metrics.visualWidth)
+        }
+            .frame(width: Metrics.interactionWidth)
             .contentShape(Rectangle())
-            .onHover { hovering in
-                if hovering {
+            .offset(x: offset)
+            .zIndex(10)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active:
+                    guard !isShowingResizeCursor else { return }
                     NSCursor.resizeLeftRight.push()
-                } else {
-                    NSCursor.pop()
+                    isShowingResizeCursor = true
+                case .ended:
+                    releaseResizeCursor()
                 }
+            }
+            .onDisappear {
+                releaseResizeCursor()
             }
             .gesture(
                 DragGesture(minimumDistance: 1)
@@ -337,5 +398,11 @@ struct PaneDivider: View {
                         onDragEnd()
                     }
             )
+    }
+
+    private func releaseResizeCursor() {
+        guard isShowingResizeCursor else { return }
+        NSCursor.pop()
+        isShowingResizeCursor = false
     }
 }

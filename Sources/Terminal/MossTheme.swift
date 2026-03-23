@@ -8,6 +8,10 @@ final class MossTheme {
     let background: Color
     let foreground: Color
     let backgroundOpacity: Double
+    /// Overlay opacity derived from ghostty's unfocused-split-opacity.
+    let unfocusedSplitOpacity: Double
+    /// Fill color derived from ghostty's unfocused-split-fill, or background.
+    let unfocusedSplitFill: Color
 
     /// Slightly lighter/darker variant for panel surfaces
     let surfaceBackground: Color
@@ -20,14 +24,32 @@ final class MossTheme {
         var bg = ghostty_config_color_s(r: 0, g: 0, b: 0)
         var fg = ghostty_config_color_s(r: 255, g: 255, b: 255)
         var opacity: Double = 1.0
+        var unfocusedSplitOpacityValue: Double = 0.7
+        var unfocusedSplitFillValue = bg
 
         if let config {
             let bgKey = "background"
             let fgKey = "foreground"
             let opKey = "background-opacity"
+            let unfocusedSplitOpacityKey = "unfocused-split-opacity"
+            let unfocusedSplitFillKey = "unfocused-split-fill"
             ghostty_config_get(config, &bg, bgKey, UInt(bgKey.utf8.count))
             ghostty_config_get(config, &fg, fgKey, UInt(fgKey.utf8.count))
             ghostty_config_get(config, &opacity, opKey, UInt(opKey.utf8.count))
+            ghostty_config_get(
+                config,
+                &unfocusedSplitOpacityValue,
+                unfocusedSplitOpacityKey,
+                UInt(unfocusedSplitOpacityKey.utf8.count)
+            )
+            if !ghostty_config_get(
+                config,
+                &unfocusedSplitFillValue,
+                unfocusedSplitFillKey,
+                UInt(unfocusedSplitFillKey.utf8.count)
+            ) {
+                unfocusedSplitFillValue = bg
+            }
         }
 
         let bgColor = Color(
@@ -44,6 +66,12 @@ final class MossTheme {
         self.background = bgColor
         self.foreground = fgColor
         self.backgroundOpacity = opacity
+        self.unfocusedSplitOpacity = 1 - min(1.0, max(0.15, unfocusedSplitOpacityValue))
+        self.unfocusedSplitFill = Color(
+            red: Double(unfocusedSplitFillValue.r) / 255,
+            green: Double(unfocusedSplitFillValue.g) / 255,
+            blue: Double(unfocusedSplitFillValue.b) / 255
+        )
 
         // Determine if theme is light or dark based on bg luminance
         let luminance = (0.299 * Double(bg.r) + 0.587 * Double(bg.g) + 0.114 * Double(bg.b)) / 255

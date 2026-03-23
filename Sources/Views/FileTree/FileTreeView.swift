@@ -107,9 +107,6 @@ struct FileTreeNodeView: View {
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
             .listRowBackground(Color.clear)
-            .onHover { hovering in
-                isHovered = hovering
-            }
     }
 
     @ViewBuilder
@@ -146,11 +143,18 @@ struct FileTreeNodeView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .background(rowBackground(isSelected: false))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(rowBorder(isSelected: false), lineWidth: 1)
+                }
+                .onHover { hovering in
+                    isHovered = hovering
+                }
+                .onTapGesture {
+                    model.setExpanded(node, !model.isExpanded(node))
                 }
             }
         } else {
@@ -172,6 +176,9 @@ struct FileTreeNodeView: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(rowBorder(isSelected: model.selectedFile == node.url), lineWidth: 1)
+            }
+            .onHover { hovering in
+                isHovered = hovering
             }
             .onTapGesture {
                 model.selectedFile = node.url

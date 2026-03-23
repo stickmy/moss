@@ -8,6 +8,9 @@ final class TerminalSession: Identifiable {
     let socketPath: String
     var title: String = ""
     var status: TerminalStatus = .none
+    private var manualStatus: TerminalStatus = .none
+    private var automaticStatus: TerminalStatus = .none
+    private var desktopNotificationPending = false
     var isFocused: Bool = false
     var workingDirectory: String = "~"
     var gitBranch: String?
@@ -27,6 +30,43 @@ final class TerminalSession: Identifiable {
         self.id = UUID()
         self.terminalApp = terminalApp
         self.socketPath = socketPath
+    }
+
+    func setManualStatus(_ status: TerminalStatus) {
+        manualStatus = status
+        updateDisplayedStatus()
+    }
+
+    func setAutomaticStatus(_ status: TerminalStatus) {
+        automaticStatus = status
+        updateDisplayedStatus()
+    }
+
+    private func updateDisplayedStatus() {
+        let nextStatus: TerminalStatus
+
+        if manualStatus != .none {
+            nextStatus = manualStatus
+        } else if desktopNotificationPending {
+            nextStatus = .pending
+        } else {
+            nextStatus = automaticStatus
+        }
+
+        guard status != nextStatus else { return }
+
+        status = nextStatus
+    }
+
+    func handleDesktopNotification(title: String, body: String) {
+        desktopNotificationPending = true
+        updateDisplayedStatus()
+    }
+
+    func acknowledgeDesktopNotificationPending() {
+        guard desktopNotificationPending else { return }
+        desktopNotificationPending = false
+        updateDisplayedStatus()
     }
 
     deinit {
@@ -149,6 +189,14 @@ extension TerminalSession: MossSurfaceViewDelegate {
 
     func surfaceDidChangeFocus(_ focused: Bool) {
         isFocused = focused
+    }
+
+    func surfaceDidRequestDesktopNotification(title: String, body: String) {
+        handleDesktopNotification(title: title, body: body)
+    }
+
+    func surfaceDidAcknowledgePendingAttention() {
+        acknowledgeDesktopNotificationPending()
     }
 
     func surfaceDidClose(processAlive: Bool) {

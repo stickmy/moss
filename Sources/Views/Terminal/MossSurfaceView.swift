@@ -8,6 +8,8 @@ protocol MossSurfaceViewDelegate: AnyObject {
     func surfaceDidChangeTitle(_ title: String)
     func surfaceDidChangePwd(_ pwd: String)
     func surfaceDidChangeFocus(_ focused: Bool)
+    func surfaceDidRequestDesktopNotification(title: String, body: String)
+    func surfaceDidAcknowledgePendingAttention()
     func surfaceDidClose(processAlive: Bool)
 }
 
@@ -23,6 +25,8 @@ final class MossSurfaceView: NSView, NSTextInputClient {
     private var surface: ghostty_surface_t?
     private var bridge: MossSurfaceBridge?
     private var metalLayer: CAMetalLayer?
+    private var lastContentScale: Double?
+    private var lastFramebufferSize: (width: UInt32, height: UInt32)?
 
     // Display link
     private var displayLink: CVDisplayLink?
@@ -75,6 +79,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
     private func commonInit() {
         wantsLayer = true
+        focusRingType = .none
 
         let metal = CAMetalLayer()
         metal.device = MTLCreateSystemDefaultDevice()
@@ -103,7 +108,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
     override func layout() {
         super.layout()
-        metalLayer?.frame = bounds
+        synchronizeMetalLayerFrame()
         synchronizeMetrics()
     }
 
@@ -125,41 +130,123 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         )
         config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
+        config.wait_after_command = false
 
-        // Per-surface environment variables via ghostty_surface_config_s.env_vars
-        let socketKey = strdup("MOSS_SOCKET_PATH")!
-        let socketVal = strdup(socketPath ?? "")!
-        let surfaceKey = strdup("MOSS_SURFACE_ID")!
-        let surfaceVal = strdup(sessionId?.uuidString ?? "")!
-        defer {
-            free(socketKey); free(socketVal)
-            free(surfaceKey); free(surfaceVal)
+        let shellCommand = terminalApp.surfaceShellCommand()
+        let resourcesPath = terminalApp.embeddedResourcesPath
+
+        var envPairs: [(String, String)] = [
+            ("MOSS_SOCKET_PATH", socketPath ?? ""),
+            ("MOSS_SURFACE_ID", sessionId?.uuidString ?? ""),
+            ("MOSS_CLI_PATH", Self.resolveMossCLIPath() ?? ""),
+        ]
+
+        if let resourcesPath, !resourcesPath.isEmpty {
+            envPairs.append(("GHOSTTY_RESOURCES_DIR", resourcesPath))
         }
 
-        var envVars = [
-            ghostty_env_var_s(key: socketKey, value: socketVal),
-            ghostty_env_var_s(key: surfaceKey, value: surfaceVal),
-        ]
+        if let shellCommand,
+           URL(fileURLWithPath: shellCommand).lastPathComponent == "zsh",
+           let resourcesPath,
+           !resourcesPath.isEmpty
+        {
+            let zshDotdir = URL(fileURLWithPath: resourcesPath)
+                .appendingPathComponent("shell-integration/zsh")
+                .path
+            envPairs.append(("ZDOTDIR", zshDotdir))
+
+            if let existingZdotdir = ProcessInfo.processInfo.environment["ZDOTDIR"],
+               !existingZdotdir.isEmpty
+            {
+                envPairs.append(("GHOSTTY_ZSH_ZDOTDIR", existingZdotdir))
+            }
+        }
+
+        // Per-surface environment variables via ghostty_surface_config_s.env_vars
+        let allocatedEnvPairs = envPairs.map { (strdup($0.0)!, strdup($0.1)!) }
+        defer {
+            for (key, value) in allocatedEnvPairs {
+                free(key)
+                free(value)
+            }
+        }
+
+        var envVars = allocatedEnvPairs.map { key, value in
+            ghostty_env_var_s(key: key, value: value)
+        }
 
         envVars.withUnsafeMutableBufferPointer { envBuffer in
             config.env_vars = envBuffer.baseAddress
             config.env_var_count = envBuffer.count
 
-            if let workingDirectory {
-                workingDirectory.withCString { wd in
-                    config.working_directory = wd
+            let createGhosttySurface = { [self] in
+                if let workingDirectory = self.workingDirectory {
+                    workingDirectory.withCString { wd in
+                        config.working_directory = wd
+                        self.surface = ghostty_surface_new(app, &config)
+                    }
+                } else {
                     self.surface = ghostty_surface_new(app, &config)
                 }
+            }
+
+            if let shellCommand {
+                shellCommand.withCString { command in
+                    config.command = command
+                    createGhosttySurface()
+                }
             } else {
-                self.surface = ghostty_surface_new(app, &config)
+                createGhosttySurface()
             }
         }
 
         if let surface {
+            lastContentScale = nil
+            lastFramebufferSize = nil
             surfaceBridge.rawSurface = surface
             terminalApp.retain(surfaceBridge)
             synchronizeMetrics()
         }
+    }
+
+    private func synchronizeMetalLayerFrame() {
+        guard let metalLayer, metalLayer.frame != bounds else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        metalLayer.frame = bounds
+        CATransaction.commit()
+    }
+
+    private static func resolveMossCLIPath() -> String? {
+        let fm = FileManager.default
+
+        if let override = ProcessInfo.processInfo.environment["MOSS_CLI_PATH"],
+           fm.isExecutableFile(atPath: override)
+        {
+            return override
+        }
+
+        let bundleCandidates: [String?] = [
+            Bundle.main.bundleURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("moss")
+                .path,
+            Bundle.main.executableURL?
+                .deletingLastPathComponent()
+                .appendingPathComponent("moss")
+                .path,
+            Bundle.main.sharedSupportURL?
+                .appendingPathComponent("moss")
+                .path,
+        ]
+
+        for candidate in bundleCandidates.compactMap({ $0 }) {
+            if fm.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+
+        return nil
     }
 
     private func synchronizeMetrics() {
@@ -173,8 +260,18 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         let pixelH = UInt32((bounds.height * scale).rounded(.down))
         guard pixelW > 0, pixelH > 0 else { return }
 
-        ghostty_surface_set_content_scale(surface, scale, scale)
-        ghostty_surface_set_size(surface, pixelW, pixelH)
+        if lastContentScale != scale {
+            ghostty_surface_set_content_scale(surface, scale, scale)
+            lastContentScale = scale
+        }
+
+        let framebufferSize = (width: pixelW, height: pixelH)
+        if lastFramebufferSize?.width != framebufferSize.width
+            || lastFramebufferSize?.height != framebufferSize.height
+        {
+            ghostty_surface_set_size(surface, pixelW, pixelH)
+            lastFramebufferSize = framebufferSize
+        }
     }
 
     // MARK: - Display Link
@@ -187,7 +284,6 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         CVDisplayLinkCreateWithActiveCGDisplays(&link)
         guard let link else { return }
 
-        let target = displayLinkTarget
         let tick = needsTick
         CVDisplayLinkSetOutputCallback(link, { _, _, _, _, _, userdata -> CVReturn in
             guard let userdata else { return kCVReturnSuccess }
@@ -226,7 +322,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         guard let metalLayer else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         if metalLayer.contentsScale != scale {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             metalLayer.contentsScale = scale
+            CATransaction.commit()
         }
     }
 
@@ -303,6 +402,9 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         }
 
         if isBinding {
+            if isPasteKeyEquivalent(event) {
+                acknowledgePendingAttention()
+            }
             // Send directly to ghostty to execute the binding
             var key = buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
             let chars = event.characters ?? ""
@@ -319,6 +421,9 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         // Non-binding Cmd combos → send to ghostty (paste, copy, etc.)
         if event.modifierFlags.contains(.command) {
+            if isPasteKeyEquivalent(event) {
+                acknowledgePendingAttention()
+            }
             var key = buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
             key.text = nil
             return ghostty_surface_key(surface, key)
@@ -332,6 +437,8 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         // Cmd combos are handled by performKeyEquivalent
         if event.modifierFlags.contains(.command) { return }
+
+        acknowledgePendingAttention()
 
         let action: ghostty_input_action_e =
             event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
@@ -612,6 +719,15 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         }
     }
 
+    private func isPasteKeyEquivalent(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.contains(.command) else { return false }
+        return event.charactersIgnoringModifiers?.lowercased() == "v"
+    }
+
+    private func acknowledgePendingAttention() {
+        delegate?.surfaceDidAcknowledgePendingAttention()
+    }
+
     // MARK: - NSTextInputClient
 
     func hasMarkedText() -> Bool { markedText.length > 0 }
@@ -665,6 +781,20 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         }
     }
 
+    @IBAction func paste(_ sender: Any?) {
+        guard let surface, window?.firstResponder === self else { return }
+
+        acknowledgePendingAttention()
+        let action = "paste_from_clipboard"
+        _ = action.withCString { ptr in
+            ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+        }
+    }
+
+    @IBAction func pasteAsPlainText(_ sender: Any?) {
+        paste(sender)
+    }
+
     func characterIndex(for _: NSPoint) -> Int { 0 }
 
     func firstRect(
@@ -682,6 +812,11 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
     func handleAction(_ action: ghostty_action_s) {
         switch action.tag {
+        case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+            let notification = action.action.desktop_notification
+            let title = notification.title.map { String(cString: $0) } ?? ""
+            let body = notification.body.map { String(cString: $0) } ?? ""
+            delegate?.surfaceDidRequestDesktopNotification(title: title, body: body)
         case GHOSTTY_ACTION_SET_TITLE:
             if let cStr = action.action.set_title.title {
                 delegate?.surfaceDidChangeTitle(String(cString: cStr))
@@ -721,6 +856,8 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             terminalApp.remove(bridge)
         }
         bridge = nil
+        lastContentScale = nil
+        lastFramebufferSize = nil
     }
 }
 

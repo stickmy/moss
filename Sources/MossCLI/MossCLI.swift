@@ -31,15 +31,26 @@ struct MossCLI {
         switch args[0] {
         case "set":
             guard args.count >= 2 else {
-                fputs("Usage: moss status set <running|pending|none>\n", stderr)
+                fputs("Usage: moss status set <pending|none>\n", stderr)
                 exit(1)
             }
             let value = args[1]
-            guard ["running", "pending", "none"].contains(value) else {
-                fputs("Invalid status: \(value). Must be running, pending, or none.\n", stderr)
+            guard ["pending", "none"].contains(value) else {
+                fputs("Invalid status: \(value). Must be pending or none.\n", stderr)
                 exit(1)
             }
             sendCommand(command: "set_status", value: value)
+
+        case "auto":
+            guard args.count >= 2 else {
+                fputs("Usage: moss status auto <pending|none>\n", stderr)
+                exit(1)
+            }
+            guard let value = normalizedAutomaticStatusValue(args[1]) else {
+                fputs("Invalid status: \(args[1]). Must be pending or none.\n", stderr)
+                exit(1)
+            }
+            sendCommand(command: "set_auto_status", value: value)
 
         case "get":
             sendCommand(command: "get_status", value: nil)
@@ -76,12 +87,24 @@ struct MossCLI {
         }
     }
 
+    static func normalizedAutomaticStatusValue(_ value: String) -> String? {
+        switch value {
+        case "running":
+            return "none"
+        case "pending", "none":
+            return value
+        default:
+            return nil
+        }
+    }
+
     static func printUsage() {
         print("""
         Usage: moss <command> [arguments]
 
         Commands:
-          status set <running|pending|none>   Set terminal status
+          status set <pending|none>           Set terminal status
+          status auto <pending|none>          Set automatic terminal status
           status get                          Get terminal status
           help                                Show this help
         """)

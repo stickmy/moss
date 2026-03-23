@@ -1,6 +1,7 @@
 import Foundation
 import GhosttyKit
 import AppKit
+import Darwin
 
 /// Manages the ghostty app lifecycle directly via the C API.
 /// Replaces TerminalController from libghostty-spm for full control
@@ -11,24 +12,41 @@ final class MossTerminalApp {
     private nonisolated(unsafe) var config: ghostty_config_t?
     var retainedBridges: [MossSurfaceBridge] = []
     private(set) var theme: MossTheme!
+    private(set) var explicitCommandOverride: String?
+    private(set) var embeddedResourcesPath: String?
 
     init() {
         ghostty_init(0, nil)
+        installEmbeddedResourceHints()
         setupConfig()
         theme = MossTheme(config: config)
         createApp()
     }
 
+    func surfaceShellCommand() -> String? {
+        if let explicitCommandOverride, !explicitCommandOverride.isEmpty {
+            return explicitCommandOverride
+        }
+
+        if let shell = loginShellFromPasswd() {
+            return shell
+        }
+
+        if let shell = ProcessInfo.processInfo.environment["SHELL"], !shell.isEmpty {
+            return shell
+        }
+
+        return nil
+    }
+
     private func setupConfig() {
         guard let cfg = ghostty_config_new() else { return }
 
-        // Load user's ghostty config if it exists
-        let ghosttyConfigPath = NSHomeDirectory() + "/.config/ghostty/config"
-        if FileManager.default.fileExists(atPath: ghosttyConfigPath) {
-            ghostty_config_load_file(cfg, ghosttyConfigPath)
-        }
-
+        ghostty_config_load_default_files(cfg)
+        ghostty_config_load_recursive_files(cfg)
         ghostty_config_finalize(cfg)
+        explicitCommandOverride = configStringValue("command", from: cfg)
+
         config = cfg
     }
 
@@ -49,6 +67,17 @@ final class MossTerminalApp {
         app = ghostty_app_new(&rc, cfg)
     }
 
+    private func installEmbeddedResourceHints() {
+        guard let resourceURL = Bundle.main.resourceURL else { return }
+
+        let ghosttyResources = resourceURL
+            .appendingPathComponent("ghostty")
+            .path
+
+        embeddedResourcesPath = ghosttyResources
+        setenv("GHOSTTY_RESOURCES_DIR", ghosttyResources, 1)
+    }
+
     func tick() {
         guard let app else { return }
         ghostty_app_tick(app)
@@ -65,6 +94,27 @@ final class MossTerminalApp {
     deinit {
         if let app { ghostty_app_free(app) }
         if let config { ghostty_config_free(config) }
+    }
+
+    private func configStringValue(_ key: String, from cfg: ghostty_config_t) -> String? {
+        var value: UnsafePointer<Int8>?
+        guard ghostty_config_get(cfg, &value, key, UInt(key.lengthOfBytes(using: .utf8))) else {
+            return nil
+        }
+
+        guard let value else { return nil }
+        return String(cString: value)
+    }
+
+    private func loginShellFromPasswd() -> String? {
+        guard let entry = getpwuid(getuid()),
+              let shellPtr = entry.pointee.pw_shell
+        else {
+            return nil
+        }
+
+        let shell = String(cString: shellPtr)
+        return shell.isEmpty ? nil : shell
     }
 }
 

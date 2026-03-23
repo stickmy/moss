@@ -74,8 +74,21 @@ final class TerminalSessionManager {
             else {
                 return IPCResponse(success: false, message: "Invalid status value")
             }
-            session.status = status
+            session.setManualStatus(status)
             return IPCResponse(success: true, message: "Status set to \(statusValue)")
+
+        case "set_auto_status":
+            guard let statusValue = command.value else {
+                return IPCResponse(success: false, message: "Invalid status value")
+            }
+            let normalizedStatus = (statusValue == "running")
+                ? TerminalStatus.none
+                : TerminalStatus(rawValue: statusValue)
+            guard let normalizedStatus else {
+                return IPCResponse(success: false, message: "Invalid status value")
+            }
+            session.setAutomaticStatus(normalizedStatus)
+            return IPCResponse(success: true, message: "Automatic status set to \(normalizedStatus.rawValue)")
 
         case "get_status":
             return IPCResponse(success: true, message: session.status.rawValue)
