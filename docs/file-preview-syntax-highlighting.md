@@ -2,155 +2,92 @@
 
 ## Overview
 
-Moss's file preview now uses a single AppKit text system instead of the old per-line SwiftUI rendering path.
+Moss's file preview now uses a hybrid stack:
 
-- Preview host: `STTextView`
-- Syntax highlighting engine: `STTextView-Plugin-Neon`
-- Parsing/highlighting backend: Tree-sitter via Neon
+- Preview host: `WKWebView`
+- Editor/rendering engine: `CodeMirror 6`
+- Asset pipeline: local bundle built from `Web/CodeMirrorPreview`
 - Preview mode: read-only, selectable source preview
 
-This gives the preview panel editor-like behavior for:
-
-- cross-line text selection
-- `Cmd+A` / copy
-- line numbers
-- wrap / horizontal scrolling toggle
-- whole-document rendering instead of one SwiftUI view per line
+The Swift side still owns file loading, error handling, theme colors, and preview layout. The web side only renders source text.
 
 ## Current Architecture
 
 ### 1. File Loading
 
-`FilePreviewView` loads the file contents asynchronously and keeps the existing safety checks:
+`FilePreviewView` still handles all file IO on the Swift side:
 
 - binary detection by scanning the first chunk for `0x00`
 - UTF-8 decoding requirement
 - error placeholder for binary or unreadable files
 
-If the file is valid text, Moss builds a single `FilePreviewContent` value with:
+If the file is valid text, Moss builds a `FilePreviewContent` value with:
 
 - the full file text
-- an optional preview language
+- an optional language hint from `PreviewLanguageResolver`
 
 ### 2. Preview Rendering
 
-The actual preview surface is a custom `NSViewRepresentable` wrapper around `STTextView`.
+The actual preview surface is a custom `NSViewRepresentable` wrapper around `WKWebView`.
 
-- `PreviewTextView` bridges SwiftUI to AppKit
-- `PreviewTextContainerView` owns `NSScrollView + STTextView`
-- the full document is assigned to one text view
-- the preview is read-only but selectable
+- `CodeMirrorPreviewView` bridges SwiftUI to AppKit/WebKit
+- `CodeMirrorPreviewContainerView` owns one `WKWebView`
+- Swift sends text, wrap mode, filename, language hint, and theme colors to JavaScript
+- JavaScript updates one persistent CodeMirror editor instance
 
 Important behaviors:
 
-- `isEditable = false`
-- `isSelectable = true`
-- `showsLineNumbers = true`
-- wrap toggle is implemented through `isHorizontallyResizable`
+- read-only document
+- selectable text
+- line numbers
+- wrap / horizontal scrolling toggle
+- whole-document rendering in one CodeMirror view
 
 ### 3. Theme Integration
 
-Preview surfaces are visually aligned with Moss / ghostty theme colors where possible.
+Swift derives preview colors from `MossTheme` and forwards them to the web layer.
 
-- editor background comes from `MossTheme.surfaceBackground`
-- gutter text uses `secondaryForeground`
+- editor background comes from `surfaceBackground`
+- gutter background is a slightly offset surface tone
 - gutter separator uses `border`
 - foreground text uses `foreground`
+- gutter text uses `secondaryForeground`
 
-Neon token colors currently use the plugin's default theme. Moss only controls the surrounding editor surface and gutter styling for now.
+CodeMirror applies those colors through a generated editor theme. Token colors use CodeMirror's built-in highlight styles:
+
+- dark themes use `oneDarkHighlightStyle`
+- light themes use `defaultHighlightStyle`
 
 ### 4. Language Resolution
 
-`PreviewLanguageResolver` maps file names and extensions to the highlight language used by Neon.
+Swift still provides a coarse `PreviewLanguage` hint, but CodeMirror primarily resolves languages from the filename and its own language registry.
 
-Current supported highlight language enum:
+Current behavior:
 
-- `bash`
-- `c`
-- `cpp`
-- `csharp`
-- `css`
-- `go`
-- `html`
-- `java`
-- `javascript`
-- `json`
-- `markdown`
-- `php`
-- `python`
-- `ruby`
-- `rust`
-- `swift`
-- `sql`
-- `toml`
-- `typescript`
-- `yaml`
+- Markdown is rendered through CodeMirror's Markdown package
+- fenced code blocks in Markdown use CodeMirror language descriptions
+- other files use filename matching first, then the Swift language hint as fallback
 
-Representative mappings include:
+## Asset Pipeline
 
-- `Dockerfile`, `Makefile`, `.gitignore` -> `bash`
-- `swift` -> `swift`
-- `rs` -> `rust`
-- `js`, `jsx` -> `javascript`
-- `ts`, `tsx` -> `typescript`
-- `md`, `markdown` -> `markdown`
-- `yaml`, `yml` -> `yaml`
+The web bundle lives under `Web/CodeMirrorPreview`.
 
-## Current Fallback Rules
+- `package.json` declares the preview build toolchain
+- `build.mjs` bundles the editor with `esbuild`
+- output is written to `Resources/CodeMirrorPreview`
 
-### Unsupported Text Files
-
-If a text file does not map to a known highlight language:
-
-- Moss still opens it in `STTextView`
-- syntax highlighting is skipped
-- preview falls back to plain text rendering
-
-### Binary Or Invalid Text
-
-If a file is binary or cannot be decoded as UTF-8:
-
-- the preview does not attempt to render the contents
-- a placeholder error state is shown instead
-
-### Markdown Safety Fallback
-
-Markdown is currently treated as a special safety case.
-
-- `.md` / `.markdown` files are still previewed as normal text
-- Neon highlighting is temporarily disabled for markdown
-- Moss logs a warning when this fallback is used
-
-Reason:
-
-- `STTextView-Plugin-Neon` is currently crashing in the markdown highlight path when applying TextKit 2 rendering attributes
-- one concrete repro was opening this repository's `AGENTS.md`
-
-This workaround keeps the app stable while preserving source preview, selection, copying, wrapping, and line numbers.
-
-## Dependency Notes
-
-Relevant package configuration lives in `project.yml`.
-
-- `STTextView`
-- `STTextView-Plugin-Neon`
-
-Notes:
-
-- `Highlightr` has been removed from the preview path
-- `STTextView-Plugin-Neon` is currently referenced from `main` because the tagged release did not resolve cleanly in the current setup
-- the resolved revision is pinned by SwiftPM in `Moss.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
+This keeps runtime fully local. The app does not depend on a CDN.
 
 ## Known Limitations
 
-- Markdown rendered preview is not implemented; markdown is source preview only
-- Markdown syntax highlighting is temporarily disabled because of the upstream crash path
-- Neon token colors are not yet derived from ghostty theme colors
-- Unsupported text formats fall back to plain text instead of best-effort highlighting
+- Bundle size is currently larger than the old native preview path because CodeMirror language data emits many lazy chunks
+- Highlight colors are better than the old Neon path, but they are not yet derived from the full ghostty palette
+- Language detection still starts from a coarse Swift resolver for some special filenames
+- This is still source preview only, not rendered Markdown
 
 ## Future Work
 
-- Re-enable markdown highlighting after fixing or working around the Neon / STTextView markdown crash
-- Consider a custom Neon theme generated from `MossTheme`
-- Expand language mappings if more repository file types need first-class highlighting
-- Add a dedicated rendered markdown preview mode separate from source preview
+- Measure cold-open and memory costs versus the old native preview
+- Trim the bundle by replacing `@codemirror/language-data` with a curated language set
+- Add richer theme mapping from `MossTheme` into syntax token colors
+- Add a dedicated rendered Markdown mode if the preview panel needs it

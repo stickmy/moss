@@ -180,33 +180,20 @@ struct FileDiffView: View {
 
     var body: some View {
         ZStack {
-            if isLoading {
-                FileDiffPlaceholder(
-                    icon: "arrow.trianglehead.branch",
-                    title: "Loading diff",
-                    message: "Gathering the latest changes for this file."
-                )
-            } else if let error {
+            if let error {
                 FileDiffPlaceholder(
                     icon: "exclamationmark.triangle",
                     title: error,
                     message: "Try opening a tracked file inside a git repository."
                 )
-            } else if diffContent.isEmpty {
+            } else if !diffContent.isEmpty {
+                FileDiffScrollableContent(text: diffContent, lines: diffLines, theme: theme)
+            } else if !isLoading {
                 FileDiffPlaceholder(
                     icon: "checkmark.seal",
                     title: "Working tree clean",
                     message: "There are no local changes for this file."
                 )
-            } else {
-                FileDiffScrollableContent(text: diffContent, lines: diffLines, theme: theme)
-                    .background(diffSurfaceBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(diffSurfaceBorder, lineWidth: 1)
-                    }
-                    .padding(12)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -221,16 +208,8 @@ struct FileDiffView: View {
     }
 
     private var diffPanelBackground: Color {
-        theme?.background ?? Color(nsColor: .controlBackgroundColor)
-    }
-
-    private var diffSurfaceBackground: Color {
         theme?.surfaceBackground.mix(with: .white, by: 0.02)
             ?? Color(nsColor: .textBackgroundColor)
-    }
-
-    private var diffSurfaceBorder: Color {
-        (theme?.border ?? Color(nsColor: .separatorColor)).opacity(0.55)
     }
 
     private func loadDiff() {
@@ -262,6 +241,12 @@ private enum FileDiffMetrics {
 }
 
 private enum FileDiffPalette {
+    struct ScrollbarPalette {
+        let thumb: NSColor
+        let hover: NSColor
+        let active: NSColor
+    }
+
     static func textColor(for line: String, theme: MossTheme?) -> NSColor {
         if isMetadataLine(line) {
             return nsColor(theme?.secondaryForeground, fallback: .secondaryLabelColor)
@@ -293,7 +278,30 @@ private enum FileDiffPalette {
     }
 
     static func canvasColor(theme: MossTheme?) -> NSColor {
-        tintedSurfaceBackground(theme: theme, tint: .white, amount: 0.02)
+        mixedColor(
+            nsColor(theme?.surfaceBackground, fallback: .textBackgroundColor),
+            with: .white,
+            amount: 0.02
+        )
+    }
+
+    static func scrollbarPalette(theme: MossTheme?) -> ScrollbarPalette {
+        let surfaceColor = nsColor(theme?.surfaceBackground, fallback: .textBackgroundColor)
+
+        if isDark(surfaceColor) {
+            return ScrollbarPalette(
+                thumb: NSColor.white.withAlphaComponent(0.16),
+                hover: NSColor.white.withAlphaComponent(0.24),
+                active: NSColor.white.withAlphaComponent(0.32)
+            )
+        }
+
+        let base = NSColor(srgbRed: 17 / 255, green: 24 / 255, blue: 39 / 255, alpha: 1)
+        return ScrollbarPalette(
+            thumb: base.withAlphaComponent(0.16),
+            hover: base.withAlphaComponent(0.24),
+            active: base.withAlphaComponent(0.32)
+        )
     }
 
     private static let addedColor = NSColor(
@@ -344,6 +352,12 @@ private enum FileDiffPalette {
             alpha: 1
         )
     }
+
+    private static func isDark(_ color: NSColor) -> Bool {
+        let resolved = color.usingColorSpace(.sRGB) ?? color
+        let luminance = (0.299 * resolved.redComponent) + (0.587 * resolved.greenComponent) + (0.114 * resolved.blueComponent)
+        return luminance < 0.5
+    }
 }
 
 private struct FileDiffScrollableContent: NSViewRepresentable {
@@ -374,9 +388,12 @@ private final class FileDiffTextContainerView: NSView {
 
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
+        scrollView.scrollerStyle = .overlay
         scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        scrollView.horizontalScroller = FileDiffScroller()
+        scrollView.verticalScroller = FileDiffScroller()
         scrollView.documentView = textView
 
         addSubview(scrollView)
@@ -396,6 +413,8 @@ private final class FileDiffTextContainerView: NSView {
     func update(text: String, lines: [String], theme: MossTheme?) {
         let shouldResetScrollOrigin = previousText != text
         textView.update(text: text, lines: lines, theme: theme)
+        (scrollView.horizontalScroller as? FileDiffScroller)?.apply(theme: theme)
+        (scrollView.verticalScroller as? FileDiffScroller)?.apply(theme: theme)
         previousText = text
         needsLayout = true
         layoutSubtreeIfNeeded()
@@ -421,6 +440,101 @@ private final class FileDiffTextContainerView: NSView {
         )
 
         textView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+    }
+}
+
+@MainActor
+private final class FileDiffScroller: NSScroller {
+    private var thumbColor = NSColor.white.withAlphaComponent(0.16)
+    private var hoverThumbColor = NSColor.white.withAlphaComponent(0.24)
+    private var activeThumbColor = NSColor.white.withAlphaComponent(0.32)
+    private var isHovered = false
+    private var isPressed = false
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override class func scrollerWidth(
+        for controlSize: NSControl.ControlSize,
+        scrollerStyle: NSScroller.Style
+    ) -> CGFloat {
+        5
+    }
+
+    override class var isCompatibleWithOverlayScrollers: Bool {
+        true
+    }
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.clear.setFill()
+        dirtyRect.fill()
+        drawKnob()
+    }
+
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
+
+    override func drawKnob() {
+        let knobRect = rect(for: .knob)
+        guard !knobRect.isEmpty else { return }
+
+        currentThumbColor.setFill()
+        NSBezierPath(rect: knobRect).fill()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        hoverTrackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        isPressed = false
+        needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isPressed = true
+        needsDisplay = true
+        super.mouseDown(with: event)
+        isPressed = false
+        needsDisplay = true
+    }
+
+    func apply(theme: MossTheme?) {
+        let palette = FileDiffPalette.scrollbarPalette(theme: theme)
+        thumbColor = palette.thumb
+        hoverThumbColor = palette.hover
+        activeThumbColor = palette.active
+        needsDisplay = true
+    }
+
+    private var currentThumbColor: NSColor {
+        if isPressed {
+            return activeThumbColor
+        }
+        if isHovered {
+            return hoverThumbColor
+        }
+        return thumbColor
     }
 }
 

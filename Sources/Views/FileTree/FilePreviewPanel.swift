@@ -106,11 +106,15 @@ struct FilePreviewPanel: View {
                     .zIndex(10)
 
                 ZStack {
-                    if showDiff {
-                        FileDiffView(url: url)
-                    } else {
-                        FilePreviewView(url: url, wrapLines: wrapLines)
-                    }
+                    FilePreviewView(url: url, wrapLines: wrapLines)
+                        .opacity(showDiff ? 0 : 1)
+                        .allowsHitTesting(!showDiff)
+                        .accessibilityHidden(showDiff)
+
+                    FileDiffView(url: url)
+                        .opacity(showDiff ? 1 : 0)
+                        .allowsHitTesting(showDiff)
+                        .accessibilityHidden(!showDiff)
 
                     if isEditorMenuPresented {
                         Rectangle()

@@ -23,6 +23,7 @@ let package = Package(
                 .linkedFramework("Cocoa"),
                 .linkedFramework("Metal"),
                 .linkedFramework("QuartzCore"),
+                .linkedFramework("WebKit"),
             ]
         ),
         .executableTarget(

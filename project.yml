@@ -10,12 +10,6 @@ packages:
   libghostty-spm:
     url: https://github.com/Lakr233/libghostty-spm.git
     branch: main
-  STTextView:
-    url: https://github.com/krzyzanowskim/STTextView.git
-    from: "2.2.2"
-  STTextView-Plugin-Neon:
-    url: https://github.com/krzyzanowskim/STTextView-Plugin-Neon.git
-    branch: main
 
 targets:
   Moss:
@@ -26,6 +20,9 @@ targets:
         excludes:
           - MossCLI
       - path: Resources/ghostty
+        buildPhase: resources
+        type: folder
+      - path: Resources/CodeMirrorPreview
         buildPhase: resources
         type: folder
       - path: Resources/terminfo
@@ -52,13 +49,10 @@ targets:
       - target: MossCLI
       - package: libghostty-spm
         product: GhosttyKit
-      - package: STTextView
-        product: STTextView
-      - package: STTextView-Plugin-Neon
-        product: STTextView-Plugin-Neon
       - sdk: Cocoa.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
+      - sdk: WebKit.framework
 
   MossCLI:
     type: tool

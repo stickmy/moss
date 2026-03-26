@@ -127,7 +127,7 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(sessionManager.theme.background)
+        .background(terminalGridBackground)
         .overlay(alignment: .top) {
             if let session = zoomedSession {
                 zoomedToolbar(session: session)
@@ -157,6 +157,15 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private var terminalGridBackground: Color {
+        let theme = sessionManager.theme
+        guard sessionManager.sessions.count > 1 else {
+            return theme.background
+        }
+
+        return theme.border.opacity(0.9)
     }
 
     // MARK: - Focus
@@ -232,8 +241,8 @@ struct ContentView: View {
         let columns: Int
         let rows: Int
         let size: CGSize
-        let spacing: CGFloat = 2
-        let padding: CGFloat = 2
+        let spacing: CGFloat
+        let padding: CGFloat
 
         init(count: Int, size: CGSize) {
             self.count = count
@@ -249,6 +258,8 @@ struct ContentView: View {
             }
             self.columns = cols
             self.rows = max(1, Int(ceil(Double(count) / Double(cols))))
+            self.spacing = count > 1 ? 1 : 0
+            self.padding = 0
         }
 
         private func itemCount(inRow row: Int) -> Int {
