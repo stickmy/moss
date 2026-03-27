@@ -12,7 +12,10 @@ struct MossApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Terminal") {
-                    appDelegate.sessionManager.addSession()
+                    NotificationCenter.default.post(
+                        name: .terminalNewRequested,
+                        object: nil
+                    )
                 }
                 .keyboardShortcut("n", modifiers: .command)
             }

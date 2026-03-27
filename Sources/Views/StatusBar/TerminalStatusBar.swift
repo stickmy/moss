@@ -1,54 +1,22 @@
 import SwiftUI
 
-struct TerminalStatusBar: View {
-    @Bindable var session: TerminalSession
+struct TaskProgressIndicator: View {
+    let tasks: [TrackedTask]
     @Environment(\.mossTheme) private var theme
 
-    var body: some View {
-        HStack(spacing: 8) {
-            Label(abbreviatePath(session.workingDirectory), systemImage: "folder")
-                .font(.caption)
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
-                .lineLimit(1)
+    private var completedCount: Int { tasks.filter(\.isDone).count }
 
-            if let branch = session.gitBranch {
-                Label(branch, systemImage: "arrow.triangle.branch")
-                    .font(.caption)
-                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
-                    .lineLimit(1)
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(tasks) { task in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(task.isDone ? Color.green : (theme?.secondaryForeground ?? .secondary).opacity(0.3))
+                    .frame(width: 8, height: 8)
             }
-
-            Spacer()
-
-            StatusIndicator(status: session.status)
-                .id(session.status.rawValue)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(theme?.surfaceBackground.opacity(0.9) ?? Color(nsColor: .controlBackgroundColor))
-    }
-
-    private func abbreviatePath(_ path: String) -> String {
-        let home = NSHomeDirectory()
-        if path.hasPrefix(home) {
-            return "~" + path.dropFirst(home.count)
-        }
-        return path
-    }
-}
-
-struct StatusIndicator: View {
-    let status: TerminalStatus
-
-    var body: some View {
-        switch status {
-        case .pending:
-            Circle()
-                .fill(.orange)
-                .frame(width: 8, height: 8)
-
-        case .none:
-            EmptyView()
+            Text("\(completedCount)/\(tasks.count)")
+                .font(.caption2)
+                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .monospacedDigit()
         }
     }
 }

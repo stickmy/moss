@@ -470,8 +470,14 @@ private struct EditorDropdownRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovered = hovering
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                if !isHovered { isHovered = true }
+                NSCursor.arrow.set()
+            case .ended:
+                isHovered = false
+            }
         }
     }
 

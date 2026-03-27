@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationDidFinishLaunching(_: Notification) {}
 
     func applicationWillTerminate(_: Notification) {
+        sessionManager.saveCanvasSnapshot()
         socketServer.stop()
     }
 

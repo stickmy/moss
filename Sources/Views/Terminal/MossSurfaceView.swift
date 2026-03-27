@@ -44,8 +44,20 @@ final class MossSurfaceView: NSView, NSTextInputClient {
     // Active state (false when hidden in grid)
     var isActive: Bool = true {
         didSet {
-            if !isActive && window?.firstResponder === self {
-                window?.makeFirstResponder(nil)
+            guard isActive != oldValue else { return }
+
+            if isActive {
+                isHidden = false
+                if window != nil {
+                    startDisplayLink()
+                    tick()
+                }
+            } else {
+                stopDisplayLink()
+                isHidden = true
+                if window?.firstResponder === self {
+                    window?.makeFirstResponder(nil)
+                }
             }
         }
     }
@@ -100,7 +112,9 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         super.viewDidMoveToWindow()
         if window != nil && surface == nil {
             createSurface()
-            startDisplayLink()
+            if isActive {
+                startDisplayLink()
+            }
         } else if window == nil {
             stopDisplayLink()
         }
@@ -311,6 +325,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
     }
 
     func tick() {
+        guard isActive else { return }
         terminalApp.tick()
         guard let surface else { return }
         ghostty_surface_refresh(surface)
@@ -826,7 +841,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
                 delegate?.surfaceDidChangePwd(String(cString: cStr))
             }
         case GHOSTTY_ACTION_NEW_SPLIT:
-            // Moss uses a grid instead of splits — map to new terminal
+            // Moss maps split creation to a new free-positioned terminal card.
             NotificationCenter.default.post(name: .terminalNewRequested, object: nil)
         case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
             NotificationCenter.default.post(name: .terminalToggleZoom, object: nil)
@@ -897,5 +912,20 @@ private final class NeedsTick: @unchecked Sendable {
 
     func clear() {
         OSAtomicCompareAndSwap32(1, 0, &pending)
+    }
+}
+
+extension MossSurfaceView {
+    var snapshotImage: NSImage? {
+        guard !bounds.isEmpty,
+              let bitmapRep = bitmapImageRepForCachingDisplay(in: bounds)
+        else {
+            return nil
+        }
+
+        cacheDisplay(in: bounds, to: bitmapRep)
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(bitmapRep)
+        return image
     }
 }

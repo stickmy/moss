@@ -1,11 +1,19 @@
 import Foundation
 
+struct TrackedTask: Identifiable {
+    let id: String
+    let subject: String
+    var isDone: Bool = false
+}
+
 @MainActor
 @Observable
 final class TerminalSession: Identifiable {
     let id: UUID
     let terminalApp: MossTerminalApp
     let socketPath: String
+    let launchDirectory: String
+    @ObservationIgnored weak var surfaceView: MossSurfaceView?
     var title: String = ""
     var status: TerminalStatus = .none
     private var manualStatus: TerminalStatus = .none
@@ -15,7 +23,9 @@ final class TerminalSession: Identifiable {
     var workingDirectory: String = "~"
     var gitBranch: String?
     var onClose: (() -> Void)?
+    var onWorkingDirectoryChange: ((String) -> Void)?
     private nonisolated(unsafe) var gitWatcher: DispatchSourceFileSystemObject?
+    var trackedTasks: [TrackedTask] = []
 
     /// Per-session file tree state (expansion, selected file) — persists across focus switches.
     private var _fileTreeModel: FileTreeModel?
@@ -26,10 +36,18 @@ final class TerminalSession: Identifiable {
         return m
     }
 
-    init(terminalApp: MossTerminalApp, socketPath: String) {
-        self.id = UUID()
+    init(
+        id: UUID = UUID(),
+        terminalApp: MossTerminalApp,
+        socketPath: String,
+        launchDirectory: String? = nil
+    ) {
+        let resolvedLaunchDirectory = Self.resolveDirectory(launchDirectory)
+        self.id = id
         self.terminalApp = terminalApp
         self.socketPath = socketPath
+        self.launchDirectory = resolvedLaunchDirectory
+        self.workingDirectory = resolvedLaunchDirectory
     }
 
     func setManualStatus(_ status: TerminalStatus) {
@@ -56,6 +74,34 @@ final class TerminalSession: Identifiable {
         guard status != nextStatus else { return }
 
         status = nextStatus
+    }
+
+    // MARK: - Task Tracking
+
+    func addTrackedTask(id: String, subject: String) {
+        guard !trackedTasks.contains(where: { $0.id == id }) else { return }
+        var updated = trackedTasks
+        updated.append(TrackedTask(id: id, subject: subject, isDone: false))
+        trackedTasks = updated
+        NotificationCenter.default.post(name: .trackedTasksChanged, object: self)
+    }
+
+    func completeTrackedTask(id: String) {
+        guard let index = trackedTasks.firstIndex(where: { $0.id == id }) else { return }
+        var updated = trackedTasks
+        updated[index].isDone = true
+
+        if updated.allSatisfy(\.isDone) {
+            trackedTasks = []
+        } else {
+            trackedTasks = updated
+        }
+        NotificationCenter.default.post(name: .trackedTasksChanged, object: self)
+    }
+
+    func resetTrackedTasks() {
+        trackedTasks.removeAll()
+        NotificationCenter.default.post(name: .trackedTasksChanged, object: self)
     }
 
     func handleDesktopNotification(title: String, body: String) {
@@ -89,6 +135,22 @@ final class TerminalSession: Identifiable {
         fileTreeModel.updateRootPath(pwd)
         updateGitBranch()
         watchGitHead()
+        onWorkingDirectoryChange?(pwd)
+    }
+
+    private static func resolveDirectory(_ path: String?) -> String {
+        let fallback = NSHomeDirectory()
+        guard let path, !path.isEmpty else { return fallback }
+
+        let expandedPath = (path as NSString).expandingTildeInPath
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expandedPath, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            return fallback
+        }
+
+        return URL(fileURLWithPath: expandedPath).standardizedFileURL.path
     }
 
     private func parsePwdFromTitle(_ title: String) -> String? {
@@ -210,4 +272,5 @@ extension TerminalSession: MossSurfaceViewDelegate {
 
 extension Notification.Name {
     static let terminalSessionClosed = Notification.Name("terminalSessionClosed")
+    static let trackedTasksChanged = Notification.Name("trackedTasksChanged")
 }
