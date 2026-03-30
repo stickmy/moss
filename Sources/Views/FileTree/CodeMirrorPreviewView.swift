@@ -37,6 +37,12 @@ final class CodeMirrorPreviewContainerView: NSView, WKNavigationDelegate, WKScri
     private let errorLogURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/Moss/CodeMirrorPreview.log")
 
+    // Scroll position memory — static so it persists across view recreation
+    private static var scrollCache: [String: Double] = [:]
+    private var currentFileName: String?
+    private var lastKnownScrollTop: Double = 0
+    private var hasInjectedScrollListener = false
+
     override init(frame frameRect: NSRect) {
         let contentController = WKUserContentController()
         let configuration = WKWebViewConfiguration()
@@ -116,6 +122,13 @@ final class CodeMirrorPreviewContainerView: NSView, WKNavigationDelegate, WKScri
     required init?(coder: NSCoder) { fatalError() }
 
     func update(text: String, wrapLines: Bool, language: PreviewLanguage?, fileName: String, theme: MossTheme?) {
+        // Save scroll position for the old file before switching
+        if let oldFile = currentFileName, oldFile != fileName, lastKnownScrollTop > 0 {
+            Self.scrollCache[oldFile] = lastKnownScrollTop
+            lastKnownScrollTop = 0
+        }
+        currentFileName = fileName
+
         let state = CodeMirrorPreviewRenderState(
             text: text,
             wrapLines: wrapLines,
@@ -177,7 +190,50 @@ final class CodeMirrorPreviewContainerView: NSView, WKNavigationDelegate, WKScri
                 self.showStatus("CodeMirror preview update failed: \(details)", kind: .error)
             } else {
                 codeMirrorPreviewLogger.debug("CodeMirror update JS finished successfully.")
+                self.restoreScrollPosition()
             }
+        }
+    }
+
+    // MARK: - Scroll Position Memory
+
+    private func injectScrollListener() {
+        guard !hasInjectedScrollListener else { return }
+        hasInjectedScrollListener = true
+
+        let js = """
+        (function() {
+            var t;
+            var scroller = document.querySelector('.cm-scroller');
+            if (!scroller) return;
+            scroller.addEventListener('scroll', function() {
+                clearTimeout(t);
+                t = setTimeout(function() {
+                    window.webkit.messageHandlers.mossPreview.postMessage({
+                        type: 'scroll',
+                        scrollTop: scroller.scrollTop
+                    });
+                }, 150);
+            });
+        })();
+        """
+
+        webView.evaluateJavaScript(js) { _, error in
+            if let error {
+                codeMirrorPreviewLogger.debug("Scroll listener injection failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func restoreScrollPosition() {
+        guard let fileName = currentFileName,
+              let scrollTop = Self.scrollCache[fileName],
+              scrollTop > 0
+        else { return }
+
+        let js = "{ var s = document.querySelector('.cm-scroller'); if (s) s.scrollTop = \(scrollTop); }"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.webView.evaluateJavaScript(js)
         }
     }
 
@@ -276,6 +332,7 @@ final class CodeMirrorPreviewContainerView: NSView, WKNavigationDelegate, WKScri
             codeMirrorPreviewLogger.debug("Received ready message from CodeMirror preview.")
             isPageReady = true
             clearStatus()
+            injectScrollListener()
             sendPendingStateIfPossible()
         case "debug":
             if let text = body["message"] as? String {
@@ -285,6 +342,10 @@ final class CodeMirrorPreviewContainerView: NSView, WKNavigationDelegate, WKScri
             if let text = body["message"] as? String {
                 codeMirrorPreviewLogger.error("JS: \(text, privacy: .public)")
                 showStatus(text, kind: .error)
+            }
+        case "scroll":
+            if let scrollTop = body["scrollTop"] as? Double {
+                lastKnownScrollTop = scrollTop
             }
         default:
             codeMirrorPreviewLogger.debug("Ignoring CodeMirror preview message of type \(type, privacy: .public)")

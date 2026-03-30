@@ -2,7 +2,14 @@ import Foundation
 
 private struct TaskPayload: Decodable {
     let id: String
-    let subject: String
+    let subject: String?
+    let sessionId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case subject
+        case sessionId = "session_id"
+    }
 }
 
 @MainActor
@@ -173,21 +180,42 @@ final class TerminalSessionManager {
         case "get_status":
             return IPCResponse(success: true, message: session.status.rawValue)
 
+        case "session_start":
+            guard let sessionId = command.value, !sessionId.isEmpty else {
+                return IPCResponse(success: false, message: "Missing session id")
+            }
+            session.startClaudeSession(id: sessionId)
+            return IPCResponse(success: true, message: "Session started: \(sessionId)")
+
         case "task_created":
+            guard let value = command.value,
+                  let data = value.data(using: .utf8),
+                  let payload = try? JSONDecoder().decode(TaskPayload.self, from: data),
+                  let subject = payload.subject
+            else {
+                return IPCResponse(success: false, message: "Invalid task payload")
+            }
+            if let sid = payload.sessionId, !sid.isEmpty,
+               session.claudeSessionId != nil,
+               session.claudeSessionId != sid {
+                return IPCResponse(success: false, message: "Session mismatch")
+            }
+            session.addTrackedTask(id: payload.id, subject: subject)
+            return IPCResponse(success: true, message: "Task tracked")
+
+        case "task_completed":
             guard let value = command.value,
                   let data = value.data(using: .utf8),
                   let payload = try? JSONDecoder().decode(TaskPayload.self, from: data)
             else {
                 return IPCResponse(success: false, message: "Invalid task payload")
             }
-            session.addTrackedTask(id: payload.id, subject: payload.subject)
-            return IPCResponse(success: true, message: "Task tracked")
-
-        case "task_completed":
-            guard let taskId = command.value else {
-                return IPCResponse(success: false, message: "Missing task id")
+            if let sid = payload.sessionId, !sid.isEmpty,
+               session.claudeSessionId != nil,
+               session.claudeSessionId != sid {
+                return IPCResponse(success: false, message: "Session mismatch")
             }
-            session.completeTrackedTask(id: taskId)
+            session.completeTrackedTask(id: payload.id)
             return IPCResponse(success: true, message: "Task completed")
 
         case "task_reset":

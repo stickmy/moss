@@ -25,6 +25,7 @@ final class TerminalSession: Identifiable {
     var onClose: (() -> Void)?
     var onWorkingDirectoryChange: ((String) -> Void)?
     private nonisolated(unsafe) var gitWatcher: DispatchSourceFileSystemObject?
+    var claudeSessionId: String?
     var trackedTasks: [TrackedTask] = []
 
     /// Per-session file tree state (expansion, selected file) — persists across focus switches.
@@ -74,6 +75,14 @@ final class TerminalSession: Identifiable {
         guard status != nextStatus else { return }
 
         status = nextStatus
+    }
+
+    // MARK: - Claude Session
+
+    func startClaudeSession(id: String) {
+        guard claudeSessionId != id else { return }
+        claudeSessionId = id
+        resetTrackedTasks()
     }
 
     // MARK: - Task Tracking

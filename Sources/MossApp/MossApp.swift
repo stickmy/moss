@@ -18,6 +18,20 @@ struct MossApp: App {
                     )
                 }
                 .keyboardShortcut("n", modifiers: .command)
+
+                Button("Quick Open") {
+                    NotificationCenter.default.post(
+                        name: .quickOpenRequested,
+                        object: nil
+                    )
+                }
+                .keyboardShortcut("p", modifiers: .command)
+            }
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit Moss") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut("q", modifiers: .command)
             }
         }
     }

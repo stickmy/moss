@@ -124,7 +124,8 @@ struct MossCLI {
                 fputs("Usage: moss task completed <task_id>\n", stderr)
                 exit(1)
             }
-            sendCommand(command: "task_completed", value: args[1])
+            let payload = "{\"id\":\(jsonEscape(args[1]))}"
+            sendCommand(command: "task_completed", value: payload)
 
         case "reset":
             sendCommand(command: "task_reset", value: nil)
@@ -172,16 +173,26 @@ struct MossCLI {
         }
 
         let event = json["hook_event_name"] as? String ?? ""
-        let taskId = json["task_id"] as? String ?? ""
-        let taskSubject = json["task_subject"] as? String ?? ""
-        guard !taskId.isEmpty else { exit(0) }
+        let sessionId = json["session_id"] as? String ?? ""
 
         switch event {
+        case "SessionStart":
+            guard !sessionId.isEmpty else { exit(0) }
+            trySendCommand(command: "session_start", value: sessionId)
+
         case "TaskCreated":
-            let payload = "{\"id\":\(jsonEscape(taskId)),\"subject\":\(jsonEscape(taskSubject))}"
+            let taskId = json["task_id"] as? String ?? ""
+            let taskSubject = json["task_subject"] as? String ?? ""
+            guard !taskId.isEmpty else { exit(0) }
+            let payload = "{\"id\":\(jsonEscape(taskId)),\"subject\":\(jsonEscape(taskSubject)),\"session_id\":\(jsonEscape(sessionId))}"
             trySendCommand(command: "task_created", value: payload)
+
         case "TaskCompleted":
-            trySendCommand(command: "task_completed", value: taskId)
+            let taskId = json["task_id"] as? String ?? ""
+            guard !taskId.isEmpty else { exit(0) }
+            let payload = "{\"id\":\(jsonEscape(taskId)),\"session_id\":\(jsonEscape(sessionId))}"
+            trySendCommand(command: "task_completed", value: payload)
+
         default:
             break
         }

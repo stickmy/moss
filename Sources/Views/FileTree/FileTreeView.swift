@@ -1,41 +1,51 @@
+import AppKit
 import SwiftUI
 
 struct FileTreeView: View {
     @Bindable var model: FileTreeModel
     @Environment(\.mossTheme) private var theme
-    @State private var searchText = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+            // Search trigger — clicking opens QuickOpen panel
+            Button {
+                NotificationCenter.default.post(name: .quickOpenRequested, object: nil)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme?.secondaryForeground ?? .secondary)
 
-                TextField("Search files...", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme?.foreground ?? .primary)
+                    Text("Search files…")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(theme?.secondaryForeground ?? .secondary)
 
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(theme?.secondaryForeground ?? .secondary)
-                    }
-                    .buttonStyle(.plain)
+                    Spacer()
+
+                    Text("⌘P")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle((theme?.secondaryForeground ?? .secondary).opacity(0.6))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill((theme?.surfaceBackground ?? Color(nsColor: .windowBackgroundColor)).opacity(0.6))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke((theme?.border ?? Color(nsColor: .separatorColor)).opacity(0.4), lineWidth: 0.5)
+                        )
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(searchFieldBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(searchFieldBorder, lineWidth: 1)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(searchFieldBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(searchFieldBorder, lineWidth: 1)
-            }
+            .buttonStyle(.plain)
             .padding(.horizontal, 8)
             .padding(.top, 8)
             .padding(.bottom, 4)
@@ -43,17 +53,16 @@ struct FileTreeView: View {
             if model.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.rootEntries.isEmpty {
+                Text("Empty directory")
+                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                let entries = filteredEntries
-                if entries.isEmpty {
-                    Text("No matching files")
-                        .foregroundStyle(theme?.secondaryForeground ?? .secondary)
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
+                FileTreeKeyboardHost(model: model, theme: theme) {
                     List {
-                        ForEach(entries) { node in
-                            FileTreeNodeView(node: node, model: model, searchText: searchText)
+                        ForEach(model.rootEntries) { node in
+                            FileTreeNodeView(node: node, model: model)
                         }
                     }
                     .listStyle(.sidebar)
@@ -73,34 +82,96 @@ struct FileTreeView: View {
     private var searchFieldBorder: Color {
         (theme?.border ?? Color(nsColor: .separatorColor)).opacity(0.55)
     }
+}
 
-    private var filteredEntries: [FileNode] {
-        if searchText.isEmpty { return model.rootEntries }
-        let lower = searchText.lowercased()
-        return filterNodes(model.rootEntries, search: lower)
+// MARK: - Keyboard Host
+
+/// Wraps the file tree List with keyboard event handling.
+private struct FileTreeKeyboardHost<Content: View>: NSViewRepresentable {
+    let model: FileTreeModel
+    let theme: MossTheme?
+    @ViewBuilder let content: () -> Content
+
+    func makeNSView(context: Context) -> FileTreeKeyboardNSView {
+        let view = FileTreeKeyboardNSView()
+        view.model = model
+        let hostingView = NSHostingView(rootView: content())
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hostingView)
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: view.topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        context.coordinator.hostingView = hostingView
+        return view
     }
 
-    private func filterNodes(_ nodes: [FileNode], search: String) -> [FileNode] {
-        nodes.compactMap { node in
-            if !node.isDirectory {
-                return node.name.lowercased().contains(search) ? node : nil
+    func updateNSView(_ nsView: FileTreeKeyboardNSView, context: Context) {
+        nsView.model = model
+        context.coordinator.hostingView?.rootView = content()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var hostingView: NSHostingView<Content>?
+    }
+}
+
+/// NSView that captures keyboard events for file tree navigation.
+@MainActor
+final class FileTreeKeyboardNSView: NSView {
+    var model: FileTreeModel?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        guard let model else {
+            super.keyDown(with: event)
+            return
+        }
+
+        switch Int(event.keyCode) {
+        case 125: // Down arrow
+            model.moveFocus(direction: 1)
+        case 126: // Up arrow
+            model.moveFocus(direction: -1)
+        case 123: // Left arrow
+            model.collapseFocused()
+        case 124: // Right arrow
+            model.expandFocused()
+        case 36: // Return/Enter
+            model.activateFocused()
+        case 49: // Space — preview focused file
+            if let path = model.focusedPath,
+               let node = model.visibleItems.first(where: { $0.url.path == path }),
+               !node.isDirectory
+            {
+                model.selectedFile = node.url
             }
-            if node.name.lowercased().contains(search) { return node }
-            if let children = model.children(of: node) {
-                let filtered = filterNodes(children, search: search)
-                if !filtered.isEmpty { return node }
-            }
-            return nil
+        default:
+            super.keyDown(with: event)
         }
     }
 }
+
+// MARK: - FileTreeNodeView
 
 struct FileTreeNodeView: View {
     let node: FileNode
     @Bindable var model: FileTreeModel
     @Environment(\.mossTheme) private var theme
-    var searchText: String = ""
     @State private var isHovered = false
+
+    private var isFocused: Bool {
+        model.focusedPath == node.url.path
+    }
+
+    private var gitStatus: GitFileStatus? {
+        model.gitStatusForNode(node)
+    }
 
     var body: some View {
         rowContent
@@ -120,9 +191,7 @@ struct FileTreeNodeView: View {
             ) {
                 if let children = model.children(of: node) {
                     ForEach(children) { child in
-                        if matchesSearch(child) {
-                            FileTreeNodeView(node: child, model: model, searchText: searchText)
-                        }
+                        FileTreeNodeView(node: child, model: model)
                     }
                 } else {
                     ProgressView()
@@ -132,9 +201,17 @@ struct FileTreeNodeView: View {
                 }
             } label: {
                 Label {
-                    Text(node.name)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(theme?.foreground ?? .primary)
+                    HStack(spacing: 0) {
+                        Text(node.name)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(gitStatusNameColor ?? (theme?.foreground ?? .primary))
+
+                        Spacer(minLength: 4)
+
+                        if let status = gitStatus {
+                            GitStatusBadge(status: status)
+                        }
+                    }
                 } icon: {
                     Image(systemName: model.isExpanded(node) ? "folder.fill" : "folder")
                         .font(.system(size: 12, weight: .medium))
@@ -154,14 +231,24 @@ struct FileTreeNodeView: View {
                     isHovered = hovering
                 }
                 .onTapGesture {
+                    model.focusedPath = node.url.path
                     model.setExpanded(node, !model.isExpanded(node))
                 }
+                .fileTreeContextMenu(node: node, model: model)
             }
         } else {
             Label {
-                Text(node.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme?.foreground ?? .primary)
+                HStack(spacing: 0) {
+                    Text(node.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(gitStatusNameColor ?? (theme?.foreground ?? .primary))
+
+                    Spacer(minLength: 4)
+
+                    if let status = gitStatus {
+                        GitStatusBadge(status: status)
+                    }
+                }
             } icon: {
                 Image(systemName: fileIcon(for: node.name))
                     .font(.system(size: 12, weight: .medium))
@@ -180,9 +267,14 @@ struct FileTreeNodeView: View {
             .onHover { hovering in
                 isHovered = hovering
             }
-            .onTapGesture {
+            .onTapGesture(count: 2) {
+                ExternalEditorOpener.openInPreferredEditor(node.url)
+            }
+            .onTapGesture(count: 1) {
+                model.focusedPath = node.url.path
                 model.selectedFile = node.url
             }
+            .fileTreeContextMenu(node: node, model: model)
         }
     }
 
@@ -193,38 +285,41 @@ struct FileTreeNodeView: View {
         return theme?.secondaryForeground ?? .secondary
     }
 
+    private var gitStatusNameColor: Color? {
+        guard let status = gitStatus else { return nil }
+        switch status {
+        case .modified: return Color(nsColor: .systemOrange)
+        case .added, .untracked: return Color(nsColor: .systemGreen)
+        case .deleted: return Color(nsColor: .systemRed)
+        case .conflict: return Color(nsColor: .systemRed)
+        case .renamed: return Color(nsColor: .systemBlue)
+        }
+    }
+
     private func rowBackground(isSelected: Bool) -> Color {
+        if isFocused {
+            return Color.accentColor.opacity(0.10)
+        }
         if isSelected {
             return Color.accentColor.opacity(0.14)
         }
-
         if isHovered {
             return (theme?.surfaceBackground ?? Color(nsColor: .windowBackgroundColor)).opacity(0.72)
         }
-
         return .clear
     }
 
     private func rowBorder(isSelected: Bool) -> Color {
+        if isFocused {
+            return Color.accentColor.opacity(0.25)
+        }
         if isSelected {
             return Color.accentColor.opacity(0.30)
         }
-
         if isHovered {
             return (theme?.border ?? Color(nsColor: .separatorColor)).opacity(0.7)
         }
-
         return .clear
-    }
-
-    private func matchesSearch(_ node: FileNode) -> Bool {
-        if searchText.isEmpty { return true }
-        let lower = searchText.lowercased()
-        if node.name.lowercased().contains(lower) { return true }
-        if node.isDirectory, let children = model.children(of: node) {
-            return children.contains { matchesSearch($0) }
-        }
-        return node.isDirectory
     }
 
     private func fileIcon(for name: String) -> String {
@@ -238,8 +333,113 @@ struct FileTreeNodeView: View {
         case "rs": return "doc.text"
         case "sh", "zsh", "bash": return "terminal"
         case "yml", "yaml", "toml": return "gearshape"
-        case "png", "jpg", "jpeg", "gif", "svg": return "photo"
+        case "png", "jpg", "jpeg", "gif", "svg", "webp", "heic": return "photo"
         default: return "doc"
         }
     }
+}
+
+// MARK: - Git Status Badge
+
+private struct GitStatusBadge: View {
+    let status: GitFileStatus
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+    }
+
+    private var label: String {
+        switch status {
+        case .modified: "M"
+        case .added: "A"
+        case .untracked: "U"
+        case .deleted: "D"
+        case .renamed: "R"
+        case .conflict: "!"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .modified: Color(nsColor: .systemOrange)
+        case .added, .untracked: Color(nsColor: .systemGreen)
+        case .deleted, .conflict: Color(nsColor: .systemRed)
+        case .renamed: Color(nsColor: .systemBlue)
+        }
+    }
+}
+
+// MARK: - Context Menu
+
+private extension View {
+    func fileTreeContextMenu(node: FileNode, model: FileTreeModel) -> some View {
+        contextMenu {
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(node.url.path, forType: .string)
+            }
+
+            Button("Copy Relative Path") {
+                let rootResolved = model.rootPath.replacingOccurrences(of: "~", with: NSHomeDirectory())
+                let relativePath = node.url.path.replacingOccurrences(of: rootResolved + "/", with: "")
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(relativePath, forType: .string)
+            }
+
+            Button("Copy File Name") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(node.name, forType: .string)
+            }
+
+            Divider()
+
+            Button("Reveal in Finder") {
+                if node.isDirectory {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: node.url.path)
+                } else {
+                    NSWorkspace.shared.activateFileViewerSelecting([node.url])
+                }
+            }
+
+            if !node.isDirectory {
+                Button("Open in Editor") {
+                    ExternalEditorOpener.openInPreferredEditor(node.url)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - External Editor Opener
+
+enum ExternalEditorOpener {
+    static func openInPreferredEditor(_ url: URL) {
+        let preferredPath = UserDefaults.standard.string(forKey: "preferredExternalEditorPath") ?? ""
+
+        if !preferredPath.isEmpty {
+            let editorURL = URL(fileURLWithPath: preferredPath)
+            guard FileManager.default.fileExists(atPath: preferredPath) else {
+                NSWorkspace.shared.open(url)
+                return
+            }
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.open([url], withApplicationAt: editorURL, configuration: config)
+            return
+        }
+
+        NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Notification
+
+extension Notification.Name {
+    static let quickOpenRequested = Notification.Name("quickOpenRequested")
 }

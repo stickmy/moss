@@ -387,6 +387,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         // App-level shortcuts work regardless of focus
         if event.modifierFlags.contains(.command) {
+            if event.keyCode == 0x0C, !event.modifierFlags.contains(.shift) {
+                NSApplication.shared.terminate(nil)
+                return true
+            }
             if event.keyCode == 0x24, event.modifierFlags.contains(.shift) {
                 NotificationCenter.default.post(name: .terminalToggleZoom, object: nil)
                 return true
@@ -397,6 +401,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             }
             if event.keyCode == 0x0B, !event.modifierFlags.contains(.shift) {
                 NotificationCenter.default.post(name: .terminalToggleFileTree, object: nil)
+                return true
+            }
+            if event.keyCode == 0x23, !event.modifierFlags.contains(.shift) {
+                NotificationCenter.default.post(name: .quickOpenRequested, object: nil)
                 return true
             }
         }
@@ -794,6 +802,13 @@ final class MossSurfaceView: NSView, NSTextInputClient {
                 ghostty_surface_text(surface, ptr, UInt(chars.utf8.count))
             }
         }
+    }
+
+    override func doCommand(by selector: Selector) {
+        // Prevent NSBeep for unhandled key combinations.
+        // AppKit calls doCommand for selectors like noop: or cancelOperation:
+        // and the default implementation beeps. Terminal handles all input
+        // through ghostty, so we suppress everything here.
     }
 
     @IBAction func paste(_ sender: Any?) {

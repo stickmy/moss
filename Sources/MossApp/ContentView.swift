@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var lastFocusedSessionId: UUID?
     @State private var fileTreeWidth: CGFloat = 220
     @State private var dragOffsetTree: CGFloat = 0
+    @State private var showQuickOpen = false
 
     private var focusedSession: TerminalSession? {
         sessionManager.focusedSession
@@ -83,6 +84,26 @@ struct ContentView: View {
                 .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
+        // Quick Open overlay
+        .overlay(alignment: .top) {
+            if showQuickOpen, let session = activeFileTreeSession {
+                QuickOpenPanel(
+                    fileTreeModel: session.fileTreeModel,
+                    rootPath: session.fileTreeModel.rootPath,
+                    onSelect: { url in
+                        showQuickOpen = false
+                        if !showFileTree { showFileTree = true }
+                        session.fileTreeModel.selectedFile = url
+                    },
+                    onDismiss: {
+                        showQuickOpen = false
+                    }
+                )
+                .frame(width: 600)
+                .padding(.top, 48)
+            }
+        }
+        .animation(nil, value: showQuickOpen)
         .animation(.easeInOut(duration: 0.2), value: showFileTree ? activeFileTreeSession?.fileTreeModel.selectedFile : nil)
         .background(sessionManager.theme.background)
         .environment(\.mossTheme, sessionManager.theme)
@@ -99,6 +120,9 @@ struct ContentView: View {
                 lastFocusedSessionId = id
                 fileTreeSession = session
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quickOpenRequested)) { _ in
+            showQuickOpen = true
         }
     }
 }

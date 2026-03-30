@@ -11,7 +11,7 @@ enum HookInstaller {
         return (home as NSString).appendingPathComponent(".claude/settings.json")
     }()
 
-    private static let hookEvents = ["TaskCreated", "TaskCompleted"]
+    private static let hookEvents = ["SessionStart", "TaskCreated", "TaskCompleted"]
 
     static func install() {
         let mossPath = resolveExecutablePath()

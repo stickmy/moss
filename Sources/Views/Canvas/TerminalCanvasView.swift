@@ -16,6 +16,7 @@ struct TerminalCanvasView: View {
     @State private var hasRequestedInitialFocus = false
     @State private var scrollMonitor: Any?
     @State private var magnifyMonitor: Any?
+    @State private var keyMonitor: Any?
     @State private var canvasHover = CanvasHoverRef()
 
     private var canvasStore: TerminalCanvasStore { sessionManager.canvasStore }
@@ -47,6 +48,7 @@ struct TerminalCanvasView: View {
                             isInteracting: interactingSessionId == session.id,
                             onFocus: { focusSession(session) },
                             onFit: { fitViewport(to: session) },
+                            onClose: { sessionManager.removeSession(session) },
                             onInteractionChanged: { isInteracting in
                                 interactingSessionId = isInteracting ? session.id : nil
                             },
@@ -93,10 +95,12 @@ struct TerminalCanvasView: View {
                 requestInitialFocusIfNeeded()
                 installScrollMonitor()
                 installMagnifyMonitor()
+                installKeyMonitor()
             }
             .onDisappear {
                 removeScrollMonitor()
                 removeMagnifyMonitor()
+                removeKeyMonitor()
             }
             .onChange(of: size) { _, newValue in
                 canvasSize = newValue
@@ -343,6 +347,21 @@ struct TerminalCanvasView: View {
             guard hover.isHovered else { return event }
             guard let window = event.window else { return event }
 
+            // Cmd+scroll = zoom canvas
+            if event.modifierFlags.contains(.command) {
+                let dy = event.scrollingDeltaY
+                let sensitivity: CGFloat = event.hasPreciseScrollingDeltas ? 0.005 : 0.03
+                let factor = 1 + dy * sensitivity
+                var viewport = store.viewport
+                viewport.scale = min(
+                    TerminalCanvasMetrics.maxScale,
+                    max(TerminalCanvasMetrics.minScale, viewport.scale * factor)
+                )
+                viewport.fittedSessionId = nil
+                store.setViewport(viewport)
+                return nil
+            }
+
             // Let the focused terminal handle its own scrollback
             if let focused = window.firstResponder as? MossSurfaceView {
                 let point = focused.convert(event.locationInWindow, from: nil)
@@ -414,6 +433,51 @@ struct TerminalCanvasView: View {
             magnifyMonitor = nil
         }
     }
+
+    // MARK: - Key Monitor
+
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        let store = canvasStore
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .subtracting(.capsLock)
+            guard mods == .command else { return event }
+
+            switch event.charactersIgnoringModifiers {
+            case "=", "+":
+                var viewport = store.viewport
+                viewport.scale = min(
+                    TerminalCanvasMetrics.maxScale,
+                    max(TerminalCanvasMetrics.minScale, viewport.scale * 1.1)
+                )
+                viewport.fittedSessionId = nil
+                store.setViewport(viewport)
+                return nil
+            case "-":
+                var viewport = store.viewport
+                viewport.scale = min(
+                    TerminalCanvasMetrics.maxScale,
+                    max(TerminalCanvasMetrics.minScale, viewport.scale / 1.1)
+                )
+                viewport.fittedSessionId = nil
+                store.setViewport(viewport)
+                return nil
+            case "0":
+                store.resetViewport()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let monitor = keyMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyMonitor = nil
+        }
+    }
 }
 
 private struct TerminalCanvasCard: View {
@@ -428,6 +492,7 @@ private struct TerminalCanvasCard: View {
     let isInteracting: Bool
     let onFocus: () -> Void
     let onFit: () -> Void
+    let onClose: () -> Void
     let onInteractionChanged: (Bool) -> Void
     let resolveMove: (_ originalRect: CGRect, _ translation: CGSize) -> CGRect
     let commitMove: (_ rect: CGRect) -> Void
@@ -479,10 +544,9 @@ private struct TerminalCanvasCard: View {
             header(showFitButton: showFitButton)
                 .frame(height: headerHeight)
 
-            if isAppearanceFocused {
-                accentColor
-                    .frame(height: 2)
-            }
+            accentColor
+                .frame(height: 2)
+                .opacity(isAppearanceFocused ? 1 : 0)
 
             terminalContent()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -524,14 +588,14 @@ private struct TerminalCanvasCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if showFitButton {
-                Button(action: onFit) {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                CardHeaderButton(systemImage: "viewfinder", color: theme?.secondaryForeground ?? .secondary, action: onFit)
+                CardHeaderButton(systemImage: "xmark", color: theme?.secondaryForeground ?? .secondary, action: onClose)
             } else {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                Image(systemName: "viewfinder")
+                    .font(.caption)
+                    .foregroundStyle((theme?.secondaryForeground ?? .secondary).opacity(0.55))
+
+                Image(systemName: "xmark")
                     .font(.caption)
                     .foregroundStyle((theme?.secondaryForeground ?? .secondary).opacity(0.55))
             }
@@ -976,6 +1040,35 @@ private enum SurfaceFocusCoordinator {
         }
         for subview in view.subviews {
             collectSurfaceViews(in: subview, into: &result)
+        }
+    }
+}
+
+private struct CardHeaderButton: View {
+    let systemImage: String
+    let color: Color
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.caption)
+                .scaleEffect(isHovered ? 1.5 : 1.0)
+                .animation(.easeOut(duration: 0.15), value: isHovered)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(color)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                isHovered = true
+                NSCursor.pointingHand.push()
+            case .ended:
+                isHovered = false
+                NSCursor.pop()
+            }
         }
     }
 }
