@@ -55,7 +55,7 @@ struct ZoomedTerminalView: View {
                 }
 
                 VStack(spacing: 0) {
-                    StableTerminalWrapper(session: session, isActive: true)
+                    TerminalSplitContentView(session: session)
                 }
             }
         }

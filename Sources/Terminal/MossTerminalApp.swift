@@ -146,6 +146,16 @@ private func mossActionCallback(
     target: ghostty_target_s,
     action: ghostty_action_s
 ) -> Bool {
+    if target.tag == GHOSTTY_TARGET_APP {
+        DispatchQueue.main.async {
+            guard let window = NSApplication.shared.mainWindow ?? NSApplication.shared.keyWindow,
+                  let firstResponder = window.firstResponder as? MossSurfaceView
+            else { return }
+            firstResponder.handleAction(action)
+        }
+        return true
+    }
+
     guard target.tag == GHOSTTY_TARGET_SURFACE else { return false }
     guard let surfacePtr = target.target.surface else { return false }
     guard let bridgePtr = ghostty_surface_userdata(surfacePtr) else { return false }
@@ -154,7 +164,7 @@ private func mossActionCallback(
     DispatchQueue.main.async {
         bridge.view?.handleAction(action)
     }
-    return false
+    return true
 }
 
 private func mossCloseSurfaceCallback(

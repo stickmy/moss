@@ -280,6 +280,11 @@ _ghostty_deferred_init() {
       fi
     fi
 
+    # Moss CLI alias — resolve `moss` to the CLI tool bundled with Moss.app
+    if [[ -n "$MOSS_CLI_PATH" ]] && [[ -x "$MOSS_CLI_PATH" ]]; then
+      alias moss="$MOSS_CLI_PATH"
+    fi
+
     # Sudo
     if [[ "$GHOSTTY_SHELL_FEATURES" == *"sudo"* ]] && [[ -n "$TERMINFO" ]]; then
       # Wrap `sudo` command to ensure Ghostty terminfo is preserved

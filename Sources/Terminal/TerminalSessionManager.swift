@@ -157,7 +157,7 @@ final class TerminalSessionManager {
         switch command.command {
         case "set_status":
             guard let statusValue = command.value,
-                  let status = TerminalStatus(rawValue: statusValue)
+                  let status = AgentStatus(rawValue: statusValue)
             else {
                 return IPCResponse(success: false, message: "Invalid status value")
             }
@@ -165,27 +165,23 @@ final class TerminalSessionManager {
             return IPCResponse(success: true, message: "Status set to \(statusValue)")
 
         case "set_auto_status":
-            guard let statusValue = command.value else {
+            guard let statusValue = command.value,
+                  let status = AgentStatus(rawValue: statusValue)
+            else {
                 return IPCResponse(success: false, message: "Invalid status value")
             }
-            let normalizedStatus = (statusValue == "running")
-                ? TerminalStatus.none
-                : TerminalStatus(rawValue: statusValue)
-            guard let normalizedStatus else {
-                return IPCResponse(success: false, message: "Invalid status value")
-            }
-            session.setAutomaticStatus(normalizedStatus)
-            return IPCResponse(success: true, message: "Automatic status set to \(normalizedStatus.rawValue)")
+            session.setAutomaticStatus(status)
+            return IPCResponse(success: true, message: "Automatic status set to \(status.rawValue)")
 
         case "get_status":
             return IPCResponse(success: true, message: session.status.rawValue)
 
-        case "session_start":
+        case "agent_session_start":
             guard let sessionId = command.value, !sessionId.isEmpty else {
                 return IPCResponse(success: false, message: "Missing session id")
             }
-            session.startClaudeSession(id: sessionId)
-            return IPCResponse(success: true, message: "Session started: \(sessionId)")
+            session.startAgentSession(id: sessionId)
+            return IPCResponse(success: true, message: "Agent session started: \(sessionId)")
 
         case "task_created":
             guard let value = command.value,
@@ -196,8 +192,8 @@ final class TerminalSessionManager {
                 return IPCResponse(success: false, message: "Invalid task payload")
             }
             if let sid = payload.sessionId, !sid.isEmpty,
-               session.claudeSessionId != nil,
-               session.claudeSessionId != sid {
+               session.agentSessionId != nil,
+               session.agentSessionId != sid {
                 return IPCResponse(success: false, message: "Session mismatch")
             }
             session.addTrackedTask(id: payload.id, subject: subject)
@@ -211,8 +207,8 @@ final class TerminalSessionManager {
                 return IPCResponse(success: false, message: "Invalid task payload")
             }
             if let sid = payload.sessionId, !sid.isEmpty,
-               session.claudeSessionId != nil,
-               session.claudeSessionId != sid {
+               session.agentSessionId != nil,
+               session.agentSessionId != sid {
                 return IPCResponse(success: false, message: "Session mismatch")
             }
             session.completeTrackedTask(id: payload.id)

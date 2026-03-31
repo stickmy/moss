@@ -12,7 +12,7 @@ struct QuickOpenPanel: View {
     @State private var allFiles: [FileNode] = []
     @State private var selectedIndex = 0
     @State private var isLoading = true
-    @State private var eventMonitor: Any?
+    @State private var eventMonitor: EventMonitor?
     @FocusState private var isSearchFocused: Bool
 
     private var results: [QuickOpenResult] {
@@ -30,12 +30,12 @@ struct QuickOpenPanel: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                    .foregroundStyle(theme.secondaryForeground)
 
                 TextField("Search files by name…", text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(theme?.foreground ?? .primary)
+                    .foregroundStyle(theme.foreground)
                     .focused($isSearchFocused)
 
                 if !query.isEmpty {
@@ -44,7 +44,7 @@ struct QuickOpenPanel: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 12))
-                            .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                            .foregroundStyle(theme.secondaryForeground)
                     }
                     .buttonStyle(.plain)
                 }
@@ -53,7 +53,7 @@ struct QuickOpenPanel: View {
             .padding(.vertical, 10)
 
             Divider()
-                .overlay((theme?.border ?? .clear).opacity(0.5))
+                .overlay((theme.border).opacity(0.5))
 
             // Results
             if isLoading {
@@ -63,7 +63,7 @@ struct QuickOpenPanel: View {
             } else if results.isEmpty {
                 Text(query.isEmpty ? "No files found" : "No matches for \"\(query)\"")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                    .foregroundStyle(theme.secondaryForeground)
                     .frame(maxWidth: .infinity)
                     .frame(height: 80)
             } else {
@@ -100,7 +100,7 @@ struct QuickOpenPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke((theme?.border ?? Color(nsColor: .separatorColor)).opacity(0.6), lineWidth: 1)
+                .stroke(theme.borderMedium, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 12)
         .onAppear {
@@ -112,7 +112,7 @@ struct QuickOpenPanel: View {
             installEventMonitor()
         }
         .onDisappear {
-            removeEventMonitor()
+            eventMonitor = nil
         }
         .onChange(of: query) { _, _ in
             selectedIndex = 0
@@ -131,7 +131,7 @@ struct QuickOpenPanel: View {
     }
 
     private func installEventMonitor() {
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
+        eventMonitor = EventMonitor(.keyDown) { [self] event in
             // Don't intercept keys while IME is composing
             if event.modifierFlags.contains(.command) { return event }
             if let inputContext = NSTextInputContext.current,
@@ -157,13 +157,6 @@ struct QuickOpenPanel: View {
             }
         }
     }
-
-    private func removeEventMonitor() {
-        if let monitor = eventMonitor {
-            NSEvent.removeMonitor(monitor)
-            eventMonitor = nil
-        }
-    }
 }
 
 // MARK: - Result Row
@@ -172,25 +165,25 @@ private struct QuickOpenRow: View {
     let result: QuickOpenResult
     let rootPath: String
     let isSelected: Bool
-    let theme: MossTheme?
+    let theme: MossTheme
     @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: fileIcon)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .foregroundStyle(theme.secondaryForeground)
                 .frame(width: 16)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(result.node.name)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(theme?.foreground ?? .primary)
+                    .foregroundStyle(theme.foreground)
                     .lineLimit(1)
 
                 Text(relativePath)
                     .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle((theme?.secondaryForeground ?? .secondary).opacity(0.7))
+                    .foregroundStyle(theme.secondaryForeground.opacity(0.7))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -201,6 +194,8 @@ private struct QuickOpenRow: View {
         .padding(.vertical, 6)
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(Rectangle())
+        .pointerCursor()
         .onHover { isHovered = $0 }
     }
 
@@ -209,7 +204,7 @@ private struct QuickOpenRow: View {
             return Color.accentColor.opacity(0.16)
         }
         if isHovered {
-            return (theme?.surfaceBackground ?? Color(nsColor: .windowBackgroundColor)).opacity(0.72)
+            return theme.hoverBackground
         }
         return .clear
     }

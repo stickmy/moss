@@ -1,21 +1,27 @@
 import Foundation
 
-/// Substring used to identify Moss-installed hooks.
-/// Must not span across a JSON-escaped boundary (e.g., avoid "moss task hook"
-/// because the command value contains a `\"` between "moss" and "task hook").
-private let mossHookMarker = "task hook"
+/// Substring used to identify Moss-installed hooks in Claude Code settings.
+private let mossHookMarker = "hook claude handle"
 
-enum HookInstaller {
+enum ClaudeHookInstaller {
     private static let claudeSettingsPath: String = {
         let home = NSHomeDirectory()
         return (home as NSString).appendingPathComponent(".claude/settings.json")
     }()
 
-    private static let hookEvents = ["SessionStart", "TaskCreated", "TaskCompleted"]
+    private static let hookEvents = [
+        "SessionStart",
+        "TaskCreated",
+        "TaskCompleted",
+        "Notification",
+        "Stop",
+        "StopFailure",
+        "UserPromptSubmit",
+    ]
 
     static func install() {
         let mossPath = resolveExecutablePath()
-        let hookCommand = "\"\(mossPath)\" task hook"
+        let hookCommand = "\"\(mossPath)\" hook claude handle"
 
         // Idempotent: remove existing moss hooks first
         let settings = readSettings()
@@ -61,7 +67,6 @@ enum HookInstaller {
 
     // MARK: - Detection
 
-    /// Check parsed JSON values (element-by-element cast to avoid Foundation bridging issues).
     private static func hasMossHooks(in settings: [String: Any]) -> Bool {
         guard let hooks = settings["hooks"] as? [String: Any] else { return false }
         for event in hookEvents {

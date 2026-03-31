@@ -10,6 +10,54 @@ packages:
   libghostty-spm:
     url: https://github.com/Lakr233/libghostty-spm.git
     branch: main
+  swift-tree-sitter:
+    url: https://github.com/tree-sitter/swift-tree-sitter
+    branch: main
+  tree-sitter-cpp:
+    url: https://github.com/tree-sitter/tree-sitter-cpp
+    branch: master
+  tree-sitter-go:
+    url: https://github.com/tree-sitter/tree-sitter-go
+    branch: master
+  tree-sitter-python:
+    url: https://github.com/tree-sitter/tree-sitter-python
+    branch: master
+  tree-sitter-javascript:
+    url: https://github.com/tree-sitter/tree-sitter-javascript
+    branch: master
+  tree-sitter-typescript:
+    url: https://github.com/tree-sitter/tree-sitter-typescript
+    branch: master
+  tree-sitter-rust:
+    url: https://github.com/tree-sitter/tree-sitter-rust
+    branch: master
+  tree-sitter-java:
+    url: https://github.com/tree-sitter/tree-sitter-java
+    branch: master
+  tree-sitter-json:
+    url: https://github.com/tree-sitter/tree-sitter-json
+    branch: master
+  tree-sitter-bash:
+    url: https://github.com/tree-sitter/tree-sitter-bash
+    branch: master
+  tree-sitter-ruby:
+    url: https://github.com/tree-sitter/tree-sitter-ruby
+    branch: master
+  tree-sitter-css:
+    url: https://github.com/tree-sitter/tree-sitter-css
+    branch: master
+  tree-sitter-html:
+    url: https://github.com/tree-sitter/tree-sitter-html
+    branch: master
+  tree-sitter-yaml:
+    url: https://github.com/tree-sitter-grammars/tree-sitter-yaml
+    branch: master
+  tree-sitter-markdown:
+    url: https://github.com/tree-sitter-grammars/tree-sitter-markdown
+    branch: split_parser
+  tree-sitter-toml:
+    url: https://github.com/tree-sitter-grammars/tree-sitter-toml
+    branch: master
 
 targets:
   Moss:
@@ -20,9 +68,6 @@ targets:
         excludes:
           - MossCLI
       - path: Resources/ghostty
-        buildPhase: resources
-        type: folder
-      - path: Resources/CodeMirrorPreview
         buildPhase: resources
         type: folder
       - path: Resources/terminfo
@@ -51,10 +96,43 @@ targets:
       - target: MossCLI
       - package: libghostty-spm
         product: GhosttyKit
+      - package: swift-tree-sitter
+        product: SwiftTreeSitter
+      - package: swift-tree-sitter
+        product: SwiftTreeSitterLayer
+      - package: tree-sitter-cpp
+        product: TreeSitterCPP
+      - package: tree-sitter-go
+        product: TreeSitterGo
+      - package: tree-sitter-python
+        product: TreeSitterPython
+      - package: tree-sitter-javascript
+        product: TreeSitterJavaScript
+      - package: tree-sitter-typescript
+        product: TreeSitterTypeScript
+      - package: tree-sitter-rust
+        product: TreeSitterRust
+      - package: tree-sitter-java
+        product: TreeSitterJava
+      - package: tree-sitter-json
+        product: TreeSitterJSON
+      - package: tree-sitter-bash
+        product: TreeSitterBash
+      - package: tree-sitter-ruby
+        product: TreeSitterRuby
+      - package: tree-sitter-css
+        product: TreeSitterCSS
+      - package: tree-sitter-html
+        product: TreeSitterHTML
+      - package: tree-sitter-yaml
+        product: TreeSitterYAML
+      - package: tree-sitter-markdown
+        product: TreeSitterMarkdown
+      - package: tree-sitter-toml
+        product: TreeSitterTOML
       - sdk: Cocoa.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
-      - sdk: WebKit.framework
 
   MossCLI:
     type: tool

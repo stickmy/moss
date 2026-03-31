@@ -208,8 +208,7 @@ struct FileDiffView: View {
     }
 
     private var diffPanelBackground: Color {
-        theme?.surfaceBackground.mix(with: .white, by: 0.02)
-            ?? Color(nsColor: .textBackgroundColor)
+        theme.elevatedBackground
     }
 
     private func loadDiff() {
@@ -241,28 +240,22 @@ private enum FileDiffMetrics {
 }
 
 private enum FileDiffPalette {
-    struct ScrollbarPalette {
-        let thumb: NSColor
-        let hover: NSColor
-        let active: NSColor
-    }
-
-    static func textColor(for line: String, theme: MossTheme?) -> NSColor {
+    static func textColor(for line: String, theme: MossTheme) -> NSColor {
         if isMetadataLine(line) {
-            return nsColor(theme?.secondaryForeground, fallback: .secondaryLabelColor)
+            return nsColor(theme.secondaryForeground)
         }
-        return nsColor(theme?.foreground, fallback: .labelColor)
+        return nsColor(theme.foreground)
     }
 
-    static func backgroundColor(for line: String, theme: MossTheme?) -> NSColor {
+    static func backgroundColor(for line: String, theme: MossTheme) -> NSColor {
         if line.hasPrefix("+") && !line.hasPrefix("+++") {
-            return tintedSurfaceBackground(theme: theme, tint: addedColor, amount: 0.14)
+            return tintedSurfaceBackground(theme: theme, tint: theme.diffAdded, amount: theme.isDark ? 0.7 : 0.3)
         }
         if line.hasPrefix("-") && !line.hasPrefix("---") {
-            return tintedSurfaceBackground(theme: theme, tint: removedColor, amount: 0.14)
+            return tintedSurfaceBackground(theme: theme, tint: theme.diffRemoved, amount: theme.isDark ? 0.7 : 0.3)
         }
         if line.hasPrefix("@@") {
-            return tintedSurfaceBackground(theme: theme, tint: hunkColor, amount: 0.12)
+            return tintedSurfaceBackground(theme: theme, tint: theme.diffHunk, amount: theme.isDark ? 0.38 : 0.12)
         }
         if isMetadataLine(line) {
             return tintedSurfaceBackground(theme: theme, tint: .white, amount: 0.03)
@@ -270,74 +263,31 @@ private enum FileDiffPalette {
         return .clear
     }
 
-    static func accentBarColor(for line: String) -> NSColor {
-        if line.hasPrefix("+") && !line.hasPrefix("+++") { return addedColor }
-        if line.hasPrefix("-") && !line.hasPrefix("---") { return removedColor }
-        if line.hasPrefix("@@") { return hunkColor }
+    static func accentBarColor(for line: String, theme: MossTheme) -> NSColor {
+        if line.hasPrefix("+") && !line.hasPrefix("+++") { return theme.diffAdded }
+        if line.hasPrefix("-") && !line.hasPrefix("---") { return theme.diffRemoved }
+        if line.hasPrefix("@@") { return theme.diffHunk }
         return .clear
     }
 
-    static func canvasColor(theme: MossTheme?) -> NSColor {
-        mixedColor(
-            nsColor(theme?.surfaceBackground, fallback: .textBackgroundColor),
-            with: .white,
-            amount: 0.02
-        )
+    static func canvasColor(theme: MossTheme) -> NSColor {
+        nsColor(theme.elevatedBackground)
     }
-
-    static func scrollbarPalette(theme: MossTheme?) -> ScrollbarPalette {
-        let surfaceColor = nsColor(theme?.surfaceBackground, fallback: .textBackgroundColor)
-
-        if isDark(surfaceColor) {
-            return ScrollbarPalette(
-                thumb: NSColor.white.withAlphaComponent(0.16),
-                hover: NSColor.white.withAlphaComponent(0.24),
-                active: NSColor.white.withAlphaComponent(0.32)
-            )
-        }
-
-        let base = NSColor(srgbRed: 17 / 255, green: 24 / 255, blue: 39 / 255, alpha: 1)
-        return ScrollbarPalette(
-            thumb: base.withAlphaComponent(0.16),
-            hover: base.withAlphaComponent(0.24),
-            active: base.withAlphaComponent(0.32)
-        )
-    }
-
-    private static let addedColor = NSColor(
-        srgbRed: 0.31,
-        green: 0.72,
-        blue: 0.46,
-        alpha: 1
-    )
-    private static let removedColor = NSColor(
-        srgbRed: 0.87,
-        green: 0.39,
-        blue: 0.39,
-        alpha: 1
-    )
-    private static let hunkColor = NSColor(
-        srgbRed: 0.34,
-        green: 0.67,
-        blue: 0.92,
-        alpha: 1
-    )
 
     private static func isMetadataLine(_ line: String) -> Bool {
         line.hasPrefix("diff ") || line.hasPrefix("index ") || line.hasPrefix("---") || line.hasPrefix("+++")
     }
 
-    private static func tintedSurfaceBackground(theme: MossTheme?, tint: NSColor, amount: CGFloat) -> NSColor {
+    private static func tintedSurfaceBackground(theme: MossTheme, tint: NSColor, amount: CGFloat) -> NSColor {
         mixedColor(
-            nsColor(theme?.surfaceBackground, fallback: .controlBackgroundColor),
+            nsColor(theme.surfaceBackground),
             with: tint,
             amount: amount
         )
     }
 
-    private static func nsColor(_ color: Color?, fallback: NSColor) -> NSColor {
-        guard let color else { return fallback }
-        return NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+    private static func nsColor(_ color: Color) -> NSColor {
+        NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
     }
 
     private static func mixedColor(_ base: NSColor, with tint: NSColor, amount: CGFloat) -> NSColor {
@@ -352,18 +302,12 @@ private enum FileDiffPalette {
             alpha: 1
         )
     }
-
-    private static func isDark(_ color: NSColor) -> Bool {
-        let resolved = color.usingColorSpace(.sRGB) ?? color
-        let luminance = (0.299 * resolved.redComponent) + (0.587 * resolved.greenComponent) + (0.114 * resolved.blueComponent)
-        return luminance < 0.5
-    }
 }
 
 private struct FileDiffScrollableContent: NSViewRepresentable {
     let text: String
     let lines: [String]
-    let theme: MossTheme?
+    let theme: MossTheme
 
     func makeNSView(context: Context) -> FileDiffTextContainerView {
         let view = FileDiffTextContainerView()
@@ -392,8 +336,8 @@ private final class FileDiffTextContainerView: NSView {
         scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
-        scrollView.horizontalScroller = FileDiffScroller()
-        scrollView.verticalScroller = FileDiffScroller()
+        scrollView.horizontalScroller = ThemedOverlayScroller()
+        scrollView.verticalScroller = ThemedOverlayScroller()
         scrollView.documentView = textView
 
         addSubview(scrollView)
@@ -413,8 +357,8 @@ private final class FileDiffTextContainerView: NSView {
     func update(text: String, lines: [String], theme: MossTheme?) {
         let shouldResetScrollOrigin = previousText != text
         textView.update(text: text, lines: lines, theme: theme)
-        (scrollView.horizontalScroller as? FileDiffScroller)?.apply(theme: theme)
-        (scrollView.verticalScroller as? FileDiffScroller)?.apply(theme: theme)
+        (scrollView.horizontalScroller as? ThemedOverlayScroller)?.applyTheme(theme)
+        (scrollView.verticalScroller as? ThemedOverlayScroller)?.applyTheme(theme)
         previousText = text
         needsLayout = true
         layoutSubtreeIfNeeded()
@@ -440,101 +384,6 @@ private final class FileDiffTextContainerView: NSView {
         )
 
         textView.frame = NSRect(x: 0, y: 0, width: width, height: height)
-    }
-}
-
-@MainActor
-private final class FileDiffScroller: NSScroller {
-    private var thumbColor = NSColor.white.withAlphaComponent(0.16)
-    private var hoverThumbColor = NSColor.white.withAlphaComponent(0.24)
-    private var activeThumbColor = NSColor.white.withAlphaComponent(0.32)
-    private var isHovered = false
-    private var isPressed = false
-    private var hoverTrackingArea: NSTrackingArea?
-
-    override class func scrollerWidth(
-        for controlSize: NSControl.ControlSize,
-        scrollerStyle: NSScroller.Style
-    ) -> CGFloat {
-        5
-    }
-
-    override class var isCompatibleWithOverlayScrollers: Bool {
-        true
-    }
-
-    override var isOpaque: Bool {
-        false
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.clear.setFill()
-        dirtyRect.fill()
-        drawKnob()
-    }
-
-    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
-
-    override func drawKnob() {
-        let knobRect = rect(for: .knob)
-        guard !knobRect.isEmpty else { return }
-
-        currentThumbColor.setFill()
-        NSBezierPath(rect: knobRect).fill()
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-
-        if let hoverTrackingArea {
-            removeTrackingArea(hoverTrackingArea)
-        }
-
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-        hoverTrackingArea = trackingArea
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-        needsDisplay = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovered = false
-        isPressed = false
-        needsDisplay = true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        isPressed = true
-        needsDisplay = true
-        super.mouseDown(with: event)
-        isPressed = false
-        needsDisplay = true
-    }
-
-    func apply(theme: MossTheme?) {
-        let palette = FileDiffPalette.scrollbarPalette(theme: theme)
-        thumbColor = palette.thumb
-        hoverThumbColor = palette.hover
-        activeThumbColor = palette.active
-        needsDisplay = true
-    }
-
-    private var currentThumbColor: NSColor {
-        if isPressed {
-            return activeThumbColor
-        }
-        if isHovered {
-            return hoverThumbColor
-        }
-        return thumbColor
     }
 }
 
@@ -581,9 +430,10 @@ private final class FileDiffTextView: NSTextView {
         diffLines = lines
         lineStartLocations = Self.lineStartLocations(for: lines)
         activeTheme = theme
-        backgroundColor = FileDiffPalette.canvasColor(theme: theme)
+        let resolvedTheme = theme ?? .fallback
+        backgroundColor = FileDiffPalette.canvasColor(theme: resolvedTheme)
 
-        let attributedText = Self.makeAttributedText(text: text, lines: lines, theme: theme)
+        let attributedText = Self.makeAttributedText(text: text, lines: lines, theme: resolvedTheme)
         textStorage?.setAttributedString(attributedText)
         needsDisplay = true
     }
@@ -618,10 +468,11 @@ private final class FileDiffTextView: NSTextView {
                 height: lineRect.height
             )
 
-            FileDiffPalette.backgroundColor(for: line, theme: self.activeTheme).setFill()
+            let activeTheme = self.activeTheme ?? .fallback
+            FileDiffPalette.backgroundColor(for: line, theme: activeTheme).setFill()
             rowRect.fill()
 
-            FileDiffPalette.accentBarColor(for: line).setFill()
+            FileDiffPalette.accentBarColor(for: line, theme: activeTheme).setFill()
             NSBezierPath(
                 rect: NSRect(
                     x: FileDiffMetrics.contentPadding,
@@ -659,7 +510,7 @@ private final class FileDiffTextView: NSTextView {
         return starts
     }
 
-    private static func makeAttributedText(text: String, lines: [String], theme: MossTheme?) -> NSAttributedString {
+    private static func makeAttributedText(text: String, lines: [String], theme: MossTheme) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byClipping
 
@@ -699,15 +550,15 @@ private struct FileDiffPlaceholder: View {
         VStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .foregroundStyle(theme.secondaryForeground)
 
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(theme?.foreground ?? .primary)
+                .foregroundStyle(theme.foreground)
 
             Text(message)
                 .font(.system(size: 12))
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .foregroundStyle(theme.secondaryForeground)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
         }

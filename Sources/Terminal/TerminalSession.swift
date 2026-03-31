@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 struct TrackedTask: Identifiable {
     let id: String
@@ -13,19 +14,23 @@ final class TerminalSession: Identifiable {
     let terminalApp: MossTerminalApp
     let socketPath: String
     let launchDirectory: String
-    @ObservationIgnored weak var surfaceView: MossSurfaceView?
+    let initialLeafId: UUID
+    var splitRoot: TerminalSplitNode
+    private(set) var activeSurfaceId: UUID?
     var title: String = ""
-    var status: TerminalStatus = .none
-    private var manualStatus: TerminalStatus = .none
-    private var automaticStatus: TerminalStatus = .none
+    var status: AgentStatus = .none
+    private var manualStatus: AgentStatus = .none
+    private var automaticStatus: AgentStatus = .none
     private var desktopNotificationPending = false
     var isFocused: Bool = false
     var workingDirectory: String = "~"
     var gitBranch: String?
     var onClose: (() -> Void)?
     var onWorkingDirectoryChange: ((String) -> Void)?
+    @ObservationIgnored private var surfaceViewCache: [UUID: MossSurfaceView] = [:]
+    @ObservationIgnored private var surfaceHostViewCache: [UUID: MossSurfaceHostView] = [:]
     private nonisolated(unsafe) var gitWatcher: DispatchSourceFileSystemObject?
-    var claudeSessionId: String?
+    var agentSessionId: String?
     var trackedTasks: [TrackedTask] = []
 
     /// Per-session file tree state (expansion, selected file) — persists across focus switches.
@@ -44,44 +49,56 @@ final class TerminalSession: Identifiable {
         launchDirectory: String? = nil
     ) {
         let resolvedLaunchDirectory = Self.resolveDirectory(launchDirectory)
+        let leafId = UUID()
         self.id = id
         self.terminalApp = terminalApp
         self.socketPath = socketPath
         self.launchDirectory = resolvedLaunchDirectory
         self.workingDirectory = resolvedLaunchDirectory
+        self.initialLeafId = leafId
+        self.splitRoot = .leaf(id: leafId)
+        self.activeSurfaceId = leafId
     }
 
-    func setManualStatus(_ status: TerminalStatus) {
+    func setManualStatus(_ status: AgentStatus) {
         manualStatus = status
         updateDisplayedStatus()
     }
 
-    func setAutomaticStatus(_ status: TerminalStatus) {
+    func setAutomaticStatus(_ status: AgentStatus) {
         automaticStatus = status
         updateDisplayedStatus()
     }
 
     private func updateDisplayedStatus() {
-        let nextStatus: TerminalStatus
+        let nextStatus: AgentStatus
 
         if manualStatus != .none {
             nextStatus = manualStatus
         } else if desktopNotificationPending {
-            nextStatus = .pending
+            nextStatus = .waiting
         } else {
             nextStatus = automaticStatus
         }
 
         guard status != nextStatus else { return }
 
+        let previousStatus = status
         status = nextStatus
+
+        if nextStatus == .waiting && previousStatus != .waiting {
+            AgentNotificationManager.shared.postAgentWaiting(
+                sessionId: id,
+                sessionTitle: title
+            )
+        }
     }
 
     // MARK: - Claude Session
 
-    func startClaudeSession(id: String) {
-        guard claudeSessionId != id else { return }
-        claudeSessionId = id
+    func startAgentSession(id: String) {
+        guard agentSessionId != id else { return }
+        agentSessionId = id
         resetTrackedTasks()
     }
 
@@ -122,6 +139,82 @@ final class TerminalSession: Identifiable {
         guard desktopNotificationPending else { return }
         desktopNotificationPending = false
         updateDisplayedStatus()
+    }
+
+    // MARK: - Surface View Cache
+
+    func surfaceView(for leafId: UUID) -> MossSurfaceView {
+        if let cached = surfaceViewCache[leafId] {
+            return cached
+        }
+        let view = MossSurfaceView(
+            terminalApp: terminalApp,
+            sessionId: id,
+            workingDirectory: launchDirectory,
+            socketPath: socketPath
+        )
+        view.delegate = self
+        view.leafId = leafId
+        surfaceViewCache[leafId] = view
+        splitDebugLog(
+            "TerminalSession.surfaceView create leaf=\(leafId) session=\(id) " +
+            "surface=\(debugObjectID(view))"
+        )
+        return view
+    }
+
+    func surfaceHostView(for leafId: UUID) -> MossSurfaceHostView {
+        if let cached = surfaceHostViewCache[leafId] {
+            splitDebugLog(
+                "TerminalSession.surfaceHostView reuse leaf=\(leafId) session=\(id) " +
+                "host=\(debugObjectID(cached)) surface=\(debugObjectID(cached.surfaceView))"
+            )
+            return cached
+        }
+
+        let hostView = MossSurfaceHostView(surfaceView: surfaceView(for: leafId))
+        surfaceHostViewCache[leafId] = hostView
+        splitDebugLog(
+            "TerminalSession.surfaceHostView create leaf=\(leafId) session=\(id) " +
+            "host=\(debugObjectID(hostView)) surface=\(debugObjectID(hostView.surfaceView))"
+        )
+        return hostView
+    }
+
+    func removeCachedSurface(for leafId: UUID) {
+        splitDebugLog(
+            "TerminalSession.removeCachedSurface leaf=\(leafId) session=\(id) " +
+            "host=\(debugObjectID(surfaceHostViewCache[leafId])) surface=\(debugObjectID(surfaceViewCache[leafId]))"
+        )
+        surfaceHostViewCache.removeValue(forKey: leafId)
+        surfaceViewCache.removeValue(forKey: leafId)
+    }
+
+    // MARK: - Split Management
+
+    func splitSurface(_ leafId: UUID, direction: SplitDirection) {
+        let newLeafId = UUID()
+        guard let newRoot = splitRoot.inserting(newLeafId: newLeafId, at: leafId, direction: direction) else { return }
+        splitRoot = newRoot
+        activeSurfaceId = newLeafId
+    }
+
+    func closeSurface(_ leafId: UUID) {
+        removeCachedSurface(for: leafId)
+        guard let newRoot = splitRoot.removing(leafId) else {
+            // Last leaf — close entire session
+            NotificationCenter.default.post(name: .terminalSessionClosed, object: self)
+            onClose?()
+            return
+        }
+        splitRoot = newRoot
+        if activeSurfaceId == leafId {
+            activeSurfaceId = newRoot.allLeafIds().first
+        }
+    }
+
+    func updateSplitRatio(firstChildLeafId: UUID, ratio: CGFloat) {
+        splitRoot = splitRoot.updatingRatioForSplit(firstChildLeafId: firstChildLeafId, newRatio: ratio)
     }
 
     deinit {
@@ -236,7 +329,8 @@ final class TerminalSession: Identifiable {
 // MARK: - MossSurfaceViewDelegate
 
 extension TerminalSession: MossSurfaceViewDelegate {
-    func surfaceDidChangeTitle(_ title: String) {
+    func surfaceDidChangeTitle(_ title: String, surface: MossSurfaceView) {
+        guard surface.leafId == activeSurfaceId else { return }
         // Reject titles with control characters (uninitialized/garbled data)
         guard !title.isEmpty, title.allSatisfy({ !$0.isASCII || $0.asciiValue! >= 0x20 || $0 == "\t" }) else {
             return
@@ -248,7 +342,8 @@ extension TerminalSession: MossSurfaceViewDelegate {
         }
     }
 
-    func surfaceDidChangePwd(_ pwd: String) {
+    func surfaceDidChangePwd(_ pwd: String, surface: MossSurfaceView) {
+        guard surface.leafId == activeSurfaceId else { return }
         print("[Session] surfaceDidChangePwd: \(pwd)")
         // Validate: must be a real path, no control characters
         guard !pwd.isEmpty,
@@ -258,8 +353,20 @@ extension TerminalSession: MossSurfaceViewDelegate {
         updatePwd(pwd)
     }
 
-    func surfaceDidChangeFocus(_ focused: Bool) {
-        isFocused = focused
+    func surfaceDidChangeFocus(_ focused: Bool, surface: MossSurfaceView) {
+        if focused, let leafId = surface.leafId {
+            activeSurfaceId = leafId
+            isFocused = true
+        } else if !focused {
+            // Only unfocus session if no other surface in this session has focus
+            // (the new surface's becomeFirstResponder fires after resignFirstResponder)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.activeSurfaceId == surface.leafId {
+                    self.isFocused = false
+                }
+            }
+        }
     }
 
     func surfaceDidRequestDesktopNotification(title: String, body: String) {
@@ -270,12 +377,14 @@ extension TerminalSession: MossSurfaceViewDelegate {
         acknowledgeDesktopNotificationPending()
     }
 
-    func surfaceDidClose(processAlive: Bool) {
-        NotificationCenter.default.post(
-            name: .terminalSessionClosed,
-            object: self
-        )
-        onClose?()
+    func surfaceDidRequestSplit(_ direction: SplitDirection, surface: MossSurfaceView) {
+        guard let leafId = surface.leafId else { return }
+        splitSurface(leafId, direction: direction)
+    }
+
+    func surfaceDidClose(processAlive: Bool, surface: MossSurfaceView) {
+        guard let leafId = surface.leafId else { return }
+        closeSurface(leafId)
     }
 }
 

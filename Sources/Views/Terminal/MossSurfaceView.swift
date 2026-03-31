@@ -5,12 +5,13 @@ import GhosttyKit
 
 @MainActor
 protocol MossSurfaceViewDelegate: AnyObject {
-    func surfaceDidChangeTitle(_ title: String)
-    func surfaceDidChangePwd(_ pwd: String)
-    func surfaceDidChangeFocus(_ focused: Bool)
+    func surfaceDidChangeTitle(_ title: String, surface: MossSurfaceView)
+    func surfaceDidChangePwd(_ pwd: String, surface: MossSurfaceView)
+    func surfaceDidChangeFocus(_ focused: Bool, surface: MossSurfaceView)
     func surfaceDidRequestDesktopNotification(title: String, body: String)
     func surfaceDidAcknowledgePendingAttention()
-    func surfaceDidClose(processAlive: Bool)
+    func surfaceDidRequestSplit(_ direction: SplitDirection, surface: MossSurfaceView)
+    func surfaceDidClose(processAlive: Bool, surface: MossSurfaceView)
 }
 
 // MARK: - MossSurfaceView
@@ -40,6 +41,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
     // Session linkage
     weak var delegate: MossSurfaceViewDelegate?
     var sessionId: UUID?
+    var leafId: UUID?
 
     // Active state (false when hidden in grid)
     var isActive: Bool = true {
@@ -110,6 +112,11 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        splitDebugLog(
+            "MossSurfaceView.viewDidMoveToWindow surface=\(debugObjectID(self)) " +
+            "leaf=\(leafId?.uuidString ?? "nil") window=\(debugObjectID(window)) " +
+            "superview=\(debugObjectID(superview)) bounds=\(debugRect(bounds))"
+        )
         if window != nil && surface == nil {
             createSurface()
             if isActive {
@@ -118,6 +125,15 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         } else if window == nil {
             stopDisplayLink()
         }
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        splitDebugLog(
+            "MossSurfaceView.viewDidMoveToSuperview surface=\(debugObjectID(self)) " +
+            "leaf=\(leafId?.uuidString ?? "nil") superview=\(debugObjectID(superview)) " +
+            "bounds=\(debugRect(bounds))"
+        )
     }
 
     override func layout() {
@@ -219,6 +235,11 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             lastFramebufferSize = nil
             surfaceBridge.rawSurface = surface
             terminalApp.retain(surfaceBridge)
+            splitDebugLog(
+                "MossSurfaceView.createSurface surface=\(debugObjectID(self)) " +
+                "leaf=\(leafId?.uuidString ?? "nil") metalLayer=\(debugObjectID(metalLayer)) " +
+                "bounds=\(debugRect(bounds)) scale=\(window?.backingScaleFactor ?? 0)"
+            )
             synchronizeMetrics()
         }
     }
@@ -229,6 +250,11 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         CATransaction.setDisableActions(true)
         metalLayer.frame = bounds
         CATransaction.commit()
+        splitDebugLog(
+            "MossSurfaceView.synchronizeMetalLayerFrame surface=\(debugObjectID(self)) " +
+            "leaf=\(leafId?.uuidString ?? "nil") metalLayer=\(debugObjectID(metalLayer)) " +
+            "frame=\(debugRect(metalLayer.frame))"
+        )
     }
 
     private static func resolveMossCLIPath() -> String? {
@@ -277,6 +303,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         if lastContentScale != scale {
             ghostty_surface_set_content_scale(surface, scale, scale)
             lastContentScale = scale
+            splitDebugLog(
+                "MossSurfaceView.setContentScale surface=\(debugObjectID(self)) " +
+                "leaf=\(leafId?.uuidString ?? "nil") scale=\(scale)"
+            )
         }
 
         let framebufferSize = (width: pixelW, height: pixelH)
@@ -285,6 +315,11 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         {
             ghostty_surface_set_size(surface, pixelW, pixelH)
             lastFramebufferSize = framebufferSize
+            splitDebugLog(
+                "MossSurfaceView.setSize surface=\(debugObjectID(self)) " +
+                "leaf=\(leafId?.uuidString ?? "nil") pixels=\(pixelW)x\(pixelH) " +
+                "bounds=\(debugRect(bounds)) scale=\(scale)"
+            )
         }
     }
 
@@ -351,7 +386,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
         if let surface { ghostty_surface_set_focus(surface, true) }
-        delegate?.surfaceDidChangeFocus(true)
+        delegate?.surfaceDidChangeFocus(true, surface: self)
         // Notify ContentView immediately so file tree updates reliably
         if let sessionId {
             NotificationCenter.default.post(
@@ -374,7 +409,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             )
             ghostty_surface_set_focus(surface, false)
         }
-        delegate?.surfaceDidChangeFocus(false)
+        delegate?.surfaceDidChangeFocus(false, surface: self)
         return result
     }
 
@@ -416,7 +451,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         guard let surface else { return super.performKeyEquivalent(with: event) }
 
         // Check if this key event matches a ghostty keybinding
-        var ghosttyEvent = buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
+        var ghosttyEvent = GhosttyInput.buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
         let isBinding: Bool = (event.characters ?? "").withCString { ptr in
             ghosttyEvent.text = ptr
             var flags = ghostty_binding_flags_e(0)
@@ -425,11 +460,11 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         }
 
         if isBinding {
-            if isPasteKeyEquivalent(event) {
+            if GhosttyInput.isPasteKeyEquivalent(event) {
                 acknowledgePendingAttention()
             }
             // Send directly to ghostty to execute the binding
-            var key = buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
+            var key = GhosttyInput.buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
             let chars = event.characters ?? ""
             if !chars.isEmpty, let cp = chars.utf8.first, cp >= 0x20 {
                 chars.withCString { ptr in
@@ -444,10 +479,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         // Non-binding Cmd combos → send to ghostty (paste, copy, etc.)
         if event.modifierFlags.contains(.command) {
-            if isPasteKeyEquivalent(event) {
+            if GhosttyInput.isPasteKeyEquivalent(event) {
                 acknowledgePendingAttention()
             }
-            var key = buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
+            var key = GhosttyInput.buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
             key.text = nil
             return ghostty_surface_key(surface, key)
         }
@@ -468,9 +503,9 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         // Apply macos-option-as-alt translation from ghostty config
         let translatedMods = ghostty_surface_key_translation_mods(
-            surface, ghosttyMods(event.modifierFlags)
+            surface, GhosttyInput.mods(event.modifierFlags)
         )
-        let translatedFlags = applyTranslatedMods(
+        let translatedFlags = GhosttyInput.applyTranslatedMods(
             original: event.modifierFlags,
             translated: translatedMods
         )
@@ -512,15 +547,15 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         if let texts = keyTextAccumulator, !texts.isEmpty {
             for text in texts {
-                var key = buildKeyEvent(event, action: action)
+                var key = GhosttyInput.buildKeyEvent(event, action: action)
                 text.withCString { ptr in
                     key.text = ptr
                     _ = ghostty_surface_key(surface, key)
                 }
             }
         } else {
-            var key = buildKeyEvent(event, action: action)
-            let text = ghosttyCharacters(from: translationEvent)
+            var key = GhosttyInput.buildKeyEvent(event, action: action)
+            let text = GhosttyInput.characters(from: translationEvent)
             key.composing = markedText.length > 0 || markedBefore
 
             if let text, !text.isEmpty,
@@ -539,15 +574,15 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
     override func keyUp(with event: NSEvent) {
         guard let surface else { return }
-        var key = buildKeyEvent(event, action: GHOSTTY_ACTION_RELEASE)
+        var key = GhosttyInput.buildKeyEvent(event, action: GHOSTTY_ACTION_RELEASE)
         key.text = nil
         _ = ghostty_surface_key(surface, key)
     }
 
     override func flagsChanged(with event: NSEvent) {
         guard let surface else { return }
-        let isPress = isFlagPress(event)
-        var key = buildKeyEvent(
+        let isPress = GhosttyInput.isFlagPress(event)
+        var key = GhosttyInput.buildKeyEvent(
             event, action: isPress ? GHOSTTY_ACTION_PRESS : GHOSTTY_ACTION_RELEASE
         )
         key.text = nil
@@ -568,10 +603,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         guard let surface else { return }
         let pos = convertToSurface(event.locationInWindow)
-        ghostty_surface_mouse_pos(surface, pos.x, pos.y, ghosttyMods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, pos.x, pos.y, GhosttyInput.mods(event.modifierFlags))
         ghostty_surface_mouse_button(
             surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT,
-            ghosttyMods(event.modifierFlags)
+            GhosttyInput.mods(event.modifierFlags)
         )
     }
 
@@ -582,10 +617,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         }
         guard let surface else { return }
         let pos = convertToSurface(event.locationInWindow)
-        ghostty_surface_mouse_pos(surface, pos.x, pos.y, ghosttyMods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, pos.x, pos.y, GhosttyInput.mods(event.modifierFlags))
         ghostty_surface_mouse_button(
             surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT,
-            ghosttyMods(event.modifierFlags)
+            GhosttyInput.mods(event.modifierFlags)
         )
     }
 
@@ -593,22 +628,22 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         if focusClickSuppressed { return }
         guard let surface else { return }
         let pos = convertToSurface(event.locationInWindow)
-        ghostty_surface_mouse_pos(surface, pos.x, pos.y, ghosttyMods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, pos.x, pos.y, GhosttyInput.mods(event.modifierFlags))
     }
 
     override func mouseMoved(with event: NSEvent) {
         guard let surface, window?.firstResponder === self else { return }
         let pos = convertToSurface(event.locationInWindow)
-        ghostty_surface_mouse_pos(surface, pos.x, pos.y, ghosttyMods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, pos.x, pos.y, GhosttyInput.mods(event.modifierFlags))
     }
 
     override func rightMouseDown(with event: NSEvent) {
         guard let surface else { return }
         let pos = convertToSurface(event.locationInWindow)
-        ghostty_surface_mouse_pos(surface, pos.x, pos.y, ghosttyMods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, pos.x, pos.y, GhosttyInput.mods(event.modifierFlags))
         let consumed = ghostty_surface_mouse_button(
             surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT,
-            ghosttyMods(event.modifierFlags)
+            GhosttyInput.mods(event.modifierFlags)
         )
         if !consumed {
             super.rightMouseDown(with: event)
@@ -618,17 +653,17 @@ final class MossSurfaceView: NSView, NSTextInputClient {
     override func rightMouseUp(with event: NSEvent) {
         guard let surface else { return }
         let pos = convertToSurface(event.locationInWindow)
-        ghostty_surface_mouse_pos(surface, pos.x, pos.y, ghosttyMods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, pos.x, pos.y, GhosttyInput.mods(event.modifierFlags))
         ghostty_surface_mouse_button(
             surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT,
-            ghosttyMods(event.modifierFlags)
+            GhosttyInput.mods(event.modifierFlags)
         )
     }
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface, window?.firstResponder === self else { return }
         let pos = convertToSurface(event.locationInWindow)
-        ghostty_surface_mouse_pos(surface, pos.x, pos.y, ghosttyMods(event.modifierFlags))
+        ghostty_surface_mouse_pos(surface, pos.x, pos.y, GhosttyInput.mods(event.modifierFlags))
 
         // ghostty_input_scroll_mods_t is Int32 packed bitmask:
         // bit 0 = precision, bits 1-3 = momentum phase
@@ -655,96 +690,6 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         ]
         let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
         addTrackingArea(area)
-    }
-
-    // MARK: - Key Event Construction
-
-    private func buildKeyEvent(
-        _ event: NSEvent, action: ghostty_input_action_e
-    ) -> ghostty_input_key_s {
-        var key = ghostty_input_key_s()
-        key.action = action
-        key.keycode = UInt32(event.keyCode) // Raw macOS keyCode — NOT enum-mapped
-        key.text = nil
-        key.composing = false
-        key.mods = ghosttyMods(event.modifierFlags)
-        key.consumed_mods = ghosttyMods(
-            event.modifierFlags.subtracting([.control, .command])
-        )
-        key.unshifted_codepoint = 0
-        if event.type == .keyDown || event.type == .keyUp {
-            if let chars = event.characters(byApplyingModifiers: []),
-               let cp = chars.unicodeScalars.first
-            {
-                key.unshifted_codepoint = cp.value
-            }
-        }
-        return key
-    }
-
-    private func ghosttyCharacters(from event: NSEvent) -> String? {
-        guard let characters = event.characters else { return nil }
-        if characters.count == 1, let scalar = characters.unicodeScalars.first {
-            if scalar.value < 0x20 {
-                return event.characters(
-                    byApplyingModifiers: event.modifierFlags.subtracting(.control)
-                )
-            }
-            if scalar.value >= 0xF700, scalar.value <= 0xF8FF {
-                return nil
-            }
-        }
-        return characters
-    }
-
-    private func ghosttyMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
-        var mods: UInt32 = GHOSTTY_MODS_NONE.rawValue
-        if flags.contains(.shift) { mods |= GHOSTTY_MODS_SHIFT.rawValue }
-        if flags.contains(.control) { mods |= GHOSTTY_MODS_CTRL.rawValue }
-        if flags.contains(.option) { mods |= GHOSTTY_MODS_ALT.rawValue }
-        if flags.contains(.command) { mods |= GHOSTTY_MODS_SUPER.rawValue }
-        if flags.contains(.capsLock) { mods |= GHOSTTY_MODS_CAPS.rawValue }
-        return ghostty_input_mods_e(mods)
-    }
-
-    /// Convert ghostty translated mods back to NSEvent.ModifierFlags,
-    /// preserving non-modifier bits from the original flags.
-    private func applyTranslatedMods(
-        original: NSEvent.ModifierFlags,
-        translated: ghostty_input_mods_e
-    ) -> NSEvent.ModifierFlags {
-        var result = original
-        let raw = translated.rawValue
-        for (flag, ghosttyMod) in [
-            (NSEvent.ModifierFlags.shift, GHOSTTY_MODS_SHIFT),
-            (.control, GHOSTTY_MODS_CTRL),
-            (.option, GHOSTTY_MODS_ALT),
-            (.command, GHOSTTY_MODS_SUPER),
-        ] as [(NSEvent.ModifierFlags, ghostty_input_mods_e)] {
-            if raw & ghosttyMod.rawValue != 0 {
-                result.insert(flag)
-            } else {
-                result.remove(flag)
-            }
-        }
-        return result
-    }
-
-    private func isFlagPress(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags
-        switch event.keyCode {
-        case 56, 60: return flags.contains(.shift)
-        case 58, 61: return flags.contains(.option)
-        case 59, 62: return flags.contains(.control)
-        case 55, 54: return flags.contains(.command)
-        case 57: return flags.contains(.capsLock)
-        default: return false
-        }
-    }
-
-    private func isPasteKeyEquivalent(_ event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.command) else { return false }
-        return event.charactersIgnoringModifiers?.lowercased() == "v"
     }
 
     private func acknowledgePendingAttention() {
@@ -849,15 +794,16 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             delegate?.surfaceDidRequestDesktopNotification(title: title, body: body)
         case GHOSTTY_ACTION_SET_TITLE:
             if let cStr = action.action.set_title.title {
-                delegate?.surfaceDidChangeTitle(String(cString: cStr))
+                delegate?.surfaceDidChangeTitle(String(cString: cStr), surface: self)
             }
         case GHOSTTY_ACTION_PWD:
             if let cStr = action.action.pwd.pwd {
-                delegate?.surfaceDidChangePwd(String(cString: cStr))
+                delegate?.surfaceDidChangePwd(String(cString: cStr), surface: self)
             }
         case GHOSTTY_ACTION_NEW_SPLIT:
-            // Moss maps split creation to a new free-positioned terminal card.
-            NotificationCenter.default.post(name: .terminalNewRequested, object: nil)
+            let ghosttyDir = action.action.new_split
+            let dir: SplitDirection = (ghosttyDir == GHOSTTY_SPLIT_DIRECTION_DOWN || ghosttyDir == GHOSTTY_SPLIT_DIRECTION_UP) ? .vertical : .horizontal
+            delegate?.surfaceDidRequestSplit(dir, surface: self)
         case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
             NotificationCenter.default.post(name: .terminalToggleZoom, object: nil)
         case GHOSTTY_ACTION_NEW_TAB:
@@ -870,7 +816,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
     }
 
     func handleClose(processAlive: Bool) {
-        delegate?.surfaceDidClose(processAlive: processAlive)
+        delegate?.surfaceDidClose(processAlive: processAlive, surface: self)
     }
 
     // MARK: - Cleanup
@@ -899,6 +845,7 @@ extension Notification.Name {
     static let terminalNewRequested = Notification.Name("terminalNewRequested")
     static let terminalToggleFileTree = Notification.Name("terminalToggleFileTree")
     static let terminalFocusChanged = Notification.Name("terminalFocusChanged")
+    static let terminalFocusRequested = Notification.Name("terminalFocusRequested")
 }
 
 // MARK: - DisplayLinkTarget
@@ -943,4 +890,29 @@ extension MossSurfaceView {
         image.addRepresentation(bitmapRep)
         return image
     }
+}
+
+func splitDebugLog(_ msg: @autoclosure () -> String) {
+    let line = "[\(Date())] \(msg())\n"
+    guard let data = line.data(using: .utf8) else { return }
+    let path = "/tmp/moss_split_debug.log"
+
+    if FileManager.default.fileExists(atPath: path),
+       let handle = FileHandle(forWritingAtPath: path)
+    {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        handle.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: path, contents: data)
+    }
+}
+
+func debugObjectID(_ object: AnyObject?) -> String {
+    guard let object else { return "nil" }
+    return String(UInt(bitPattern: Unmanaged.passUnretained(object).toOpaque()), radix: 16)
+}
+
+func debugRect(_ rect: CGRect) -> String {
+    "{x=\(Int(rect.origin.x)),y=\(Int(rect.origin.y)),w=\(Int(rect.width)),h=\(Int(rect.height))}"
 }

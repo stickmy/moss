@@ -8,9 +8,24 @@ private let imageExtensions: Set<String> = [
     "ico", "webp", "heic", "heif",
 ]
 
+func debugLog(_ msg: String) {
+    let line = "[\(Date())] \(msg)\n"
+    if let data = line.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: "/tmp/moss_preview_debug.log") {
+            if let fh = FileHandle(forWritingAtPath: "/tmp/moss_preview_debug.log") {
+                fh.seekToEndOfFile()
+                fh.write(data)
+                fh.closeFile()
+            }
+        } else {
+            FileManager.default.createFile(atPath: "/tmp/moss_preview_debug.log", contents: data)
+        }
+    }
+}
+
 struct FilePreviewView: View {
     let url: URL
-    let wrapLines: Bool
+    var wrapLines: Bool = false
     @Environment(\.mossTheme) private var theme
     @State private var state: FilePreviewState = .loading
 
@@ -31,13 +46,12 @@ struct FilePreviewView: View {
                     message: "Preparing a source preview for this file."
                 )
 
-            case let .loaded(content):
-                CodeMirrorPreviewView(
-                    text: content.text,
-                    wrapLines: wrapLines,
-                    language: content.language,
-                    fileName: url.lastPathComponent,
-                    theme: theme
+            case let .loaded(text):
+                NativeCodePreviewView(
+                    text: text,
+                    fileURL: url,
+                    theme: theme,
+                    wrapLines: wrapLines
                 )
 
             case let .image(nsImage):
@@ -45,7 +59,6 @@ struct FilePreviewView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(editorSurfaceBackground)
         .task(id: url) {
             loadFile()
         }
@@ -57,17 +70,12 @@ struct FilePreviewView: View {
         let fileURL = url
         let ext = fileURL.pathExtension.lowercased()
 
-        // Check if it's an image
         if imageExtensions.contains(ext) {
             DispatchQueue.global(qos: .userInitiated).async {
                 if let image = NSImage(contentsOf: fileURL) {
-                    DispatchQueue.main.async {
-                        state = .image(image)
-                    }
+                    DispatchQueue.main.async { state = .image(image) }
                 } else {
-                    DispatchQueue.main.async {
-                        state = .error("Could not load image")
-                    }
+                    DispatchQueue.main.async { state = .error("Could not load image") }
                 }
             }
             return
@@ -80,67 +88,32 @@ struct FilePreviewView: View {
                 let checkLen = min(data.count, 512)
                 let hasBinary = data.prefix(checkLen).contains(where: { $0 == 0 })
                 if hasBinary {
-                    DispatchQueue.main.async {
-                        state = .error("Binary file")
-                    }
+                    DispatchQueue.main.async { state = .error("Binary file") }
                     return
                 }
 
                 guard let text = String(data: data, encoding: .utf8) else {
-                    DispatchQueue.main.async {
-                        state = .error("Binary file")
-                    }
+                    DispatchQueue.main.async { state = .error("Binary file") }
                     return
                 }
 
-                let content = FilePreviewContent(
-                    text: text,
-                    language: resolvedHighlightLanguage(for: fileURL)
-                )
-
-                DispatchQueue.main.async {
-                    state = .loaded(content)
-                }
+                DispatchQueue.main.async { state = .loaded(text) }
             } catch {
-                DispatchQueue.main.async {
-                    state = .error(error.localizedDescription)
-                }
+                DispatchQueue.main.async { state = .error(error.localizedDescription) }
             }
         }
     }
 
     private var editorSurfaceBackground: Color {
-        theme?.surfaceBackground.mix(with: .white, by: 0.02)
-            ?? Color(nsColor: .textBackgroundColor)
-    }
-
-    private func resolvedHighlightLanguage(for fileURL: URL) -> PreviewLanguage? {
-        let language = PreviewLanguageResolver.language(for: fileURL)
-
-        if let language {
-            previewLogger.debug(
-                "Using CodeMirror highlighter for \(fileURL.lastPathComponent, privacy: .public) as \(language.debugName, privacy: .public)."
-            )
-        } else {
-            previewLogger.debug(
-                "Falling back to plain text preview for \(fileURL.lastPathComponent, privacy: .public)."
-            )
-        }
-
-        return language
+        theme.elevatedBackground
     }
 }
 
 private enum FilePreviewState {
     case loading
-    case loaded(FilePreviewContent)
+    case loaded(String)
     case image(NSImage)
     case error(String)
-}
-
-private struct FilePreviewContent {
-    let text: String
-    let language: PreviewLanguage?
 }
 
 // MARK: - Image Preview
@@ -163,13 +136,13 @@ private struct ImagePreviewView: View {
             HStack(spacing: 8) {
                 Text("\(Int(imageSize.width)) × \(Int(imageSize.height))")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                    .foregroundStyle(theme.secondaryForeground)
 
                 Spacer()
 
                 Text("\(Int(scale * 100))%")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                    .foregroundStyle(theme.secondaryForeground)
 
                 Button {
                     withAnimation(.easeOut(duration: 0.15)) { scale = max(0.1, scale - 0.25) }
@@ -178,7 +151,7 @@ private struct ImagePreviewView: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .foregroundStyle(theme.secondaryForeground)
 
                 Button {
                     withAnimation(.easeOut(duration: 0.15)) { scale = min(5.0, scale + 0.25) }
@@ -187,7 +160,7 @@ private struct ImagePreviewView: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .foregroundStyle(theme.secondaryForeground)
 
                 Button {
                     withAnimation(.easeOut(duration: 0.15)) { scale = 1.0 }
@@ -196,14 +169,14 @@ private struct ImagePreviewView: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .foregroundStyle(theme.secondaryForeground)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background((theme?.surfaceBackground ?? Color(nsColor: .controlBackgroundColor)).opacity(0.6))
+            .background(theme.surfaceBackground.opacity(0.6))
 
             Divider()
-                .overlay((theme?.border ?? .clear).opacity(0.5))
+                .overlay(theme.border.opacity(0.5))
 
             // Image display
             ScrollView([.horizontal, .vertical]) {
@@ -227,8 +200,8 @@ private struct ImagePreviewView: View {
     private var checkerboardPattern: some View {
         Canvas { context, size in
             let cellSize: CGFloat = 10
-            let light = theme?.surfaceBackground.mix(with: .white, by: 0.04) ?? Color(white: 0.15)
-            let dark = theme?.surfaceBackground.mix(with: .white, by: 0.08) ?? Color(white: 0.2)
+            let light = theme.raisedBackground
+            let dark = theme.prominentBackground
 
             for row in 0..<Int(ceil(size.height / cellSize)) {
                 for col in 0..<Int(ceil(size.width / cellSize)) {
@@ -258,15 +231,15 @@ private struct FilePreviewPlaceholder: View {
         VStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .foregroundStyle(theme.secondaryForeground)
 
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(theme?.foreground ?? .primary)
+                .foregroundStyle(theme.foreground)
 
             Text(message)
                 .font(.system(size: 12))
-                .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                .foregroundStyle(theme.secondaryForeground)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
         }

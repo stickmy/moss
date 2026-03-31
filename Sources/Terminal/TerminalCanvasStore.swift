@@ -31,7 +31,7 @@ final class TerminalCanvasStore {
     func setViewport(_ viewport: TerminalCanvasViewport) {
         let nextViewport = TerminalCanvasViewport(
             offset: viewport.offset,
-            scale: clampedScale(viewport.scale),
+            scale: TerminalCanvasMetrics.clampedScale(viewport.scale),
             fittedSessionId: viewport.fittedSessionId
         )
         guard self.viewport != nextViewport else { return }
@@ -39,24 +39,66 @@ final class TerminalCanvasStore {
         scheduleSave()
     }
 
-    func fitViewport(to sessionId: UUID, in canvasSize: CGSize) {
+    func fitViewport(to sessionId: UUID, in canvasSize: CGSize, leadingInset: CGFloat = 0) {
         guard let item = itemsById[sessionId],
               canvasSize.width > 0,
               canvasSize.height > 0
         else { return }
 
-        let availableWidth = max(1, canvasSize.width - TerminalCanvasMetrics.fitPadding * 2)
+        let visibleWidth = max(1, canvasSize.width - leadingInset)
+        let availableWidth = max(1, visibleWidth - TerminalCanvasMetrics.fitPadding * 2)
         let availableHeight = max(1, canvasSize.height - TerminalCanvasMetrics.fitPadding * 2)
         let scale = min(
             availableWidth / max(1, item.rect.width),
             availableHeight / max(1, item.rect.height)
         )
+        let fitScale = TerminalCanvasMetrics.clampedScale(scale)
+
+        // Shift viewport center to the right so the card centers in the visible
+        // (non-obscured) area rather than the full canvas.
+        let offsetX = item.rect.midX - leadingInset / (2 * fitScale)
 
         setViewport(
             TerminalCanvasViewport(
-                offset: CGPoint(x: item.rect.midX, y: item.rect.midY),
-                scale: clampedScale(scale),
+                offset: CGPoint(x: offsetX, y: item.rect.midY),
+                scale: fitScale,
                 fittedSessionId: sessionId
+            )
+        )
+    }
+
+    func fitAllViewport(in canvasSize: CGSize, leadingInset: CGFloat = 0) {
+        guard !itemsById.isEmpty,
+              canvasSize.width > 0,
+              canvasSize.height > 0
+        else {
+            setViewport(.default)
+            return
+        }
+
+        let allRects = itemsById.values.map(\.rect)
+        let minX = allRects.map(\.minX).min()!
+        let minY = allRects.map(\.minY).min()!
+        let maxX = allRects.map(\.maxX).max()!
+        let maxY = allRects.map(\.maxY).max()!
+        let boundingRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+
+        let visibleWidth = max(1, canvasSize.width - leadingInset)
+        let availableWidth = max(1, visibleWidth - TerminalCanvasMetrics.fitPadding * 2)
+        let availableHeight = max(1, canvasSize.height - TerminalCanvasMetrics.fitPadding * 2)
+        let scale = min(
+            availableWidth / max(1, boundingRect.width),
+            availableHeight / max(1, boundingRect.height)
+        )
+        let fitScale = TerminalCanvasMetrics.clampedScale(min(scale, 1.0))
+
+        let offsetX = boundingRect.midX - leadingInset / (2 * fitScale)
+
+        setViewport(
+            TerminalCanvasViewport(
+                offset: CGPoint(x: offsetX, y: boundingRect.midY),
+                scale: fitScale,
+                fittedSessionId: nil
             )
         )
     }
@@ -205,7 +247,7 @@ final class TerminalCanvasStore {
             didLoadPersistentSnapshot = true
             viewport = TerminalCanvasViewport(
                 offset: snapshot.viewport.offset,
-                scale: clampedScale(snapshot.viewport.scale),
+                scale: TerminalCanvasMetrics.clampedScale(snapshot.viewport.scale),
                 fittedSessionId: snapshot.viewport.fittedSessionId
             )
             itemsById = snapshot.items.reduce(into: [:]) { partialResult, item in
@@ -266,10 +308,6 @@ final class TerminalCanvasStore {
         rect.size.width = max(TerminalCanvasMetrics.minCardSize.width, rect.width)
         rect.size.height = max(TerminalCanvasMetrics.minCardSize.height, rect.height)
         return rect
-    }
-
-    private func clampedScale(_ scale: CGFloat) -> CGFloat {
-        min(TerminalCanvasMetrics.maxScale, max(TerminalCanvasMetrics.minScale, scale))
     }
 
     private func snapThreshold() -> CGFloat {
@@ -338,6 +376,43 @@ final class TerminalCanvasStore {
         return rect
     }
 
+    /// Find items that block movement/resize in a given direction.
+    ///
+    /// - Parameters:
+    ///   - others: Candidate items to check against.
+    ///   - perpendicularRange: The range along the perpendicular axis of the moving rect
+    ///     (e.g. Y range when checking X-axis movement).
+    ///   - perpendicularKeyPath: Key path to extract the perpendicular range from each candidate's rect.
+    ///   - originalEdge: The edge of the original rect that was clear before the move/resize.
+    ///   - candidateEdge: Key path to the candidate's edge that would block.
+    ///   - currentEdge: The edge of the current rect that is now potentially past the blocker.
+    ///   - movingPositive: Whether movement is in the positive direction (determines comparison sense).
+    private func findBlockers(
+        among others: [TerminalCanvasItemSnapshot],
+        perpendicularRange: ClosedRange<CGFloat>,
+        perpendicularRangeOf keyPath: (CGRect) -> ClosedRange<CGFloat>,
+        originalEdge: CGFloat,
+        candidateEdge: KeyPath<CGRect, CGFloat>,
+        currentEdge: CGFloat,
+        movingPositive: Bool
+    ) -> [TerminalCanvasItemSnapshot] {
+        others.filter { item in
+            let otherPerp = keyPath(item.rect)
+            guard perpendicularRange.overlaps(otherPerp) else { return false }
+
+            let otherEdge = item.rect[keyPath: candidateEdge]
+            if movingPositive {
+                // Was clear: originalEdge <= otherEdge + tolerance
+                // Now past: currentEdge > otherEdge
+                return originalEdge <= otherEdge + 0.5 && currentEdge > otherEdge
+            } else {
+                // Was clear: originalEdge >= otherEdge - tolerance
+                // Now past: currentEdge < otherEdge
+                return originalEdge >= otherEdge - 0.5 && currentEdge < otherEdge
+            }
+        }
+    }
+
     private func clampedMoveRect(
         _ rect: CGRect,
         originalRect: CGRect,
@@ -345,38 +420,60 @@ final class TerminalCanvasStore {
         others: [TerminalCanvasItemSnapshot]
     ) -> CGRect {
         var rect = rect
+        let yRange = rect.minY...rect.maxY
+        let xRange = rect.minX...rect.maxX
 
         if translation.width > 0 {
-            let blockers = others
-                .filter { rangesOverlap(rect.minY...rect.maxY, $0.rect.minY...$0.rect.maxY) }
-                .filter { originalRect.maxX <= $0.rect.minX + 0.5 }
-                .filter { rect.maxX > $0.rect.minX }
+            let blockers = findBlockers(
+                among: others,
+                perpendicularRange: yRange,
+                perpendicularRangeOf: { $0.minY...$0.maxY },
+                originalEdge: originalRect.maxX,
+                candidateEdge: \.minX,
+                currentEdge: rect.maxX,
+                movingPositive: true
+            )
             if let limit = blockers.map({ $0.rect.minX - rect.width }).min() {
                 rect.origin.x = min(rect.origin.x, limit)
             }
         } else if translation.width < 0 {
-            let blockers = others
-                .filter { rangesOverlap(rect.minY...rect.maxY, $0.rect.minY...$0.rect.maxY) }
-                .filter { originalRect.minX >= $0.rect.maxX - 0.5 }
-                .filter { rect.minX < $0.rect.maxX }
+            let blockers = findBlockers(
+                among: others,
+                perpendicularRange: yRange,
+                perpendicularRangeOf: { $0.minY...$0.maxY },
+                originalEdge: originalRect.minX,
+                candidateEdge: \.maxX,
+                currentEdge: rect.minX,
+                movingPositive: false
+            )
             if let limit = blockers.map(\.rect.maxX).max() {
                 rect.origin.x = max(rect.origin.x, limit)
             }
         }
 
         if translation.height > 0 {
-            let blockers = others
-                .filter { rangesOverlap(rect.minX...rect.maxX, $0.rect.minX...$0.rect.maxX) }
-                .filter { originalRect.maxY <= $0.rect.minY + 0.5 }
-                .filter { rect.maxY > $0.rect.minY }
+            let blockers = findBlockers(
+                among: others,
+                perpendicularRange: xRange,
+                perpendicularRangeOf: { $0.minX...$0.maxX },
+                originalEdge: originalRect.maxY,
+                candidateEdge: \.minY,
+                currentEdge: rect.maxY,
+                movingPositive: true
+            )
             if let limit = blockers.map({ $0.rect.minY - rect.height }).min() {
                 rect.origin.y = min(rect.origin.y, limit)
             }
         } else if translation.height < 0 {
-            let blockers = others
-                .filter { rangesOverlap(rect.minX...rect.maxX, $0.rect.minX...$0.rect.maxX) }
-                .filter { originalRect.minY >= $0.rect.maxY - 0.5 }
-                .filter { rect.minY < $0.rect.maxY }
+            let blockers = findBlockers(
+                among: others,
+                perpendicularRange: xRange,
+                perpendicularRangeOf: { $0.minX...$0.maxX },
+                originalEdge: originalRect.minY,
+                candidateEdge: \.maxY,
+                currentEdge: rect.minY,
+                movingPositive: false
+            )
             if let limit = blockers.map(\.rect.maxY).max() {
                 rect.origin.y = max(rect.origin.y, limit)
             }
@@ -392,22 +489,34 @@ final class TerminalCanvasStore {
         others: [TerminalCanvasItemSnapshot]
     ) -> CGRect {
         var rect = rect
+        let yRange = rect.minY...rect.maxY
+        let xRange = rect.minX...rect.maxX
 
         if handle.movesMaxX {
-            let blockers = others
-                .filter { rangesOverlap(rect.minY...rect.maxY, $0.rect.minY...$0.rect.maxY) }
-                .filter { originalRect.maxX <= $0.rect.minX + 0.5 }
-                .filter { rect.maxX > $0.rect.minX }
+            let blockers = findBlockers(
+                among: others,
+                perpendicularRange: yRange,
+                perpendicularRangeOf: { $0.minY...$0.maxY },
+                originalEdge: originalRect.maxX,
+                candidateEdge: \.minX,
+                currentEdge: rect.maxX,
+                movingPositive: true
+            )
             if let limit = blockers.map(\.rect.minX).min() {
                 rect.size.width = limit - rect.minX
             }
         }
 
         if handle.movesMinX {
-            let blockers = others
-                .filter { rangesOverlap(rect.minY...rect.maxY, $0.rect.minY...$0.rect.maxY) }
-                .filter { originalRect.minX >= $0.rect.maxX - 0.5 }
-                .filter { rect.minX < $0.rect.maxX }
+            let blockers = findBlockers(
+                among: others,
+                perpendicularRange: yRange,
+                perpendicularRangeOf: { $0.minY...$0.maxY },
+                originalEdge: originalRect.minX,
+                candidateEdge: \.maxX,
+                currentEdge: rect.minX,
+                movingPositive: false
+            )
             if let limit = blockers.map(\.rect.maxX).max() {
                 let maxX = rect.maxX
                 rect.origin.x = limit
@@ -416,20 +525,30 @@ final class TerminalCanvasStore {
         }
 
         if handle.movesMaxY {
-            let blockers = others
-                .filter { rangesOverlap(rect.minX...rect.maxX, $0.rect.minX...$0.rect.maxX) }
-                .filter { originalRect.maxY <= $0.rect.minY + 0.5 }
-                .filter { rect.maxY > $0.rect.minY }
+            let blockers = findBlockers(
+                among: others,
+                perpendicularRange: xRange,
+                perpendicularRangeOf: { $0.minX...$0.maxX },
+                originalEdge: originalRect.maxY,
+                candidateEdge: \.minY,
+                currentEdge: rect.maxY,
+                movingPositive: true
+            )
             if let limit = blockers.map(\.rect.minY).min() {
                 rect.size.height = limit - rect.minY
             }
         }
 
         if handle.movesMinY {
-            let blockers = others
-                .filter { rangesOverlap(rect.minX...rect.maxX, $0.rect.minX...$0.rect.maxX) }
-                .filter { originalRect.minY >= $0.rect.maxY - 0.5 }
-                .filter { rect.minY < $0.rect.maxY }
+            let blockers = findBlockers(
+                among: others,
+                perpendicularRange: xRange,
+                perpendicularRangeOf: { $0.minX...$0.maxX },
+                originalEdge: originalRect.minY,
+                candidateEdge: \.maxY,
+                currentEdge: rect.minY,
+                movingPositive: false
+            )
             if let limit = blockers.map(\.rect.maxY).max() {
                 let maxY = rect.maxY
                 rect.origin.y = limit
@@ -577,12 +696,5 @@ final class TerminalCanvasStore {
             }
         }
         return bestValue
-    }
-
-    private func rangesOverlap(
-        _ lhs: ClosedRange<CGFloat>,
-        _ rhs: ClosedRange<CGFloat>
-    ) -> Bool {
-        lhs.overlaps(rhs)
     }
 }

@@ -17,20 +17,20 @@ struct TaskProgressIndicator: View {
                 HStack(spacing: 2) {
                     ForEach(tasks) { task in
                         RoundedRectangle(cornerRadius: 1.5)
-                            .fill(task.isDone ? Color.green : (theme?.secondaryForeground ?? .secondary).opacity(0.3))
+                            .fill(task.isDone ? Color.green : theme.secondaryForeground.opacity(0.3))
                             .frame(width: 8, height: 8)
                     }
                 }
 
                 Text("\(completedCount)/\(tasks.count)")
                     .font(.caption2)
-                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                    .foregroundStyle(theme.secondaryForeground)
                     .monospacedDigit()
 
                 if let currentTask {
                     Text(currentTask.subject)
                         .font(.caption2)
-                        .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                        .foregroundStyle(theme.secondaryForeground)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -52,7 +52,7 @@ struct TaskProgressIndicator: View {
 private struct TaskListDropdownAnchor: NSViewRepresentable {
     @Binding var isPresented: Bool
     let tasks: [TrackedTask]
-    let theme: MossTheme?
+    let theme: MossTheme
 
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
@@ -72,22 +72,22 @@ private struct TaskListDropdownAnchor: NSViewRepresentable {
 
     final class Coordinator {
         private var panel: NSPanel?
-        private var clickMonitor: Any?
-        private var keyMonitor: Any?
+        private var clickMonitor: EventMonitor?
+        private var keyMonitor: EventMonitor?
         private var dismissAction: (() -> Void)?
 
         func show(
             relativeTo anchor: NSView,
             tasks: [TrackedTask],
-            theme: MossTheme?,
+            theme: MossTheme,
             onDismiss: @escaping () -> Void
         ) {
             guard panel == nil, let window = anchor.window else { return }
             dismissAction = onDismiss
 
-            let bgColor = theme.flatMap { NSColor($0.background) } ?? .windowBackgroundColor
-            let fgColor = theme.flatMap { NSColor($0.foreground) } ?? .labelColor
-            let dimColor = theme.flatMap { NSColor($0.secondaryForeground) } ?? .secondaryLabelColor
+            let bgColor = NSColor(theme.background)
+            let fgColor = NSColor(theme.foreground)
+            let dimColor = NSColor(theme.secondaryForeground)
             let cornerRadius: CGFloat = 4
             let shadowInset: CGFloat = 4
 
@@ -208,7 +208,7 @@ private struct TaskListDropdownAnchor: NSViewRepresentable {
             p.orderFront(nil)
             self.panel = p
 
-            clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            clickMonitor = EventMonitor([.leftMouseDown, .rightMouseDown]) { [weak self] event in
                 guard let self, let panel = self.panel else { return event }
                 if event.window !== panel {
                     DispatchQueue.main.async { self.requestDismiss() }
@@ -216,7 +216,7 @@ private struct TaskListDropdownAnchor: NSViewRepresentable {
                 return event
             }
 
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            keyMonitor = EventMonitor(.keyDown) { [weak self] event in
                 guard let self, self.panel != nil else { return event }
                 guard event.keyCode == 53 else { return event }
 
@@ -226,21 +226,17 @@ private struct TaskListDropdownAnchor: NSViewRepresentable {
         }
 
         func dismiss() {
-            if let clickMonitor {
-                NSEvent.removeMonitor(clickMonitor)
-                self.clickMonitor = nil
-            }
-            if let keyMonitor {
-                NSEvent.removeMonitor(keyMonitor)
-                self.keyMonitor = nil
-            }
+            clickMonitor = nil
+            keyMonitor = nil
             panel?.orderOut(nil)
             panel = nil
             dismissAction = nil
         }
 
         deinit {
-            dismiss()
+            // EventMonitor handles its own cleanup in deinit,
+            // but we still need to dismiss the panel.
+            panel?.orderOut(nil)
         }
 
         private func requestDismiss() {

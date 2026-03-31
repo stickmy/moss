@@ -39,6 +39,10 @@ enum TerminalCanvasMetrics {
     static let fitPadding: CGFloat = 48
     static let minScale: CGFloat = 0.1
     static let maxScale: CGFloat = 1.8
+
+    static func clampedScale(_ scale: CGFloat) -> CGFloat {
+        min(maxScale, max(minScale, scale))
+    }
 }
 
 enum TerminalCanvasResizeHandle: CaseIterable, Hashable {

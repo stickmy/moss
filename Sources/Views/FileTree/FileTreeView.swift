@@ -14,26 +14,26 @@ struct FileTreeView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                        .foregroundStyle(theme.secondaryForeground)
 
                     Text("Search files…")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                        .foregroundStyle(theme.secondaryForeground)
 
                     Spacer()
 
                     Text("⌘P")
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle((theme?.secondaryForeground ?? .secondary).opacity(0.6))
+                        .foregroundStyle(theme.secondaryForeground.opacity(0.6))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill((theme?.surfaceBackground ?? Color(nsColor: .windowBackgroundColor)).opacity(0.6))
+                                .fill(theme.surfaceBackground.opacity(0.6))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .stroke((theme?.border ?? Color(nsColor: .separatorColor)).opacity(0.4), lineWidth: 0.5)
+                                .stroke(theme.border.opacity(0.4), lineWidth: 0.5)
                         )
                 }
                 .padding(.horizontal, 10)
@@ -46,6 +46,7 @@ struct FileTreeView: View {
                 }
             }
             .buttonStyle(.plain)
+            .pointerCursor()
             .padding(.horizontal, 8)
             .padding(.top, 8)
             .padding(.bottom, 4)
@@ -55,7 +56,7 @@ struct FileTreeView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.rootEntries.isEmpty {
                 Text("Empty directory")
-                    .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                    .foregroundStyle(theme.secondaryForeground)
                     .font(.system(size: 12, weight: .medium))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -71,16 +72,15 @@ struct FileTreeView: View {
                 }
             }
         }
-        .background(theme?.background ?? Color(nsColor: .controlBackgroundColor))
+        .background(theme.background)
     }
 
     private var searchFieldBackground: Color {
-        theme?.surfaceBackground.mix(with: .white, by: 0.015)
-            ?? Color(nsColor: .windowBackgroundColor)
+        theme.surfaceBackground.mix(with: .white, by: 0.015)
     }
 
     private var searchFieldBorder: Color {
-        (theme?.border ?? Color(nsColor: .separatorColor)).opacity(0.55)
+        theme.borderSubtle
     }
 }
 
@@ -89,7 +89,7 @@ struct FileTreeView: View {
 /// Wraps the file tree List with keyboard event handling.
 private struct FileTreeKeyboardHost<Content: View>: NSViewRepresentable {
     let model: FileTreeModel
-    let theme: MossTheme?
+    let theme: MossTheme
     @ViewBuilder let content: () -> Content
 
     func makeNSView(context: Context) -> FileTreeKeyboardNSView {
@@ -204,7 +204,7 @@ struct FileTreeNodeView: View {
                     HStack(spacing: 0) {
                         Text(node.name)
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(gitStatusNameColor ?? (theme?.foreground ?? .primary))
+                            .foregroundStyle(gitStatusNameColor ?? theme.foreground)
 
                         Spacer(minLength: 4)
 
@@ -215,7 +215,7 @@ struct FileTreeNodeView: View {
                 } icon: {
                     Image(systemName: model.isExpanded(node) ? "folder.fill" : "folder")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(theme?.secondaryForeground ?? .secondary)
+                        .foregroundStyle(theme.secondaryForeground)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
@@ -241,7 +241,7 @@ struct FileTreeNodeView: View {
                 HStack(spacing: 0) {
                     Text(node.name)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(gitStatusNameColor ?? (theme?.foreground ?? .primary))
+                        .foregroundStyle(gitStatusNameColor ?? theme.foreground)
 
                     Spacer(minLength: 4)
 
@@ -280,19 +280,19 @@ struct FileTreeNodeView: View {
 
     private var iconColor: Color {
         if model.selectedFile == node.url {
-            return theme?.foreground ?? .primary
+            return theme.foreground
         }
-        return theme?.secondaryForeground ?? .secondary
+        return theme.secondaryForeground
     }
 
     private var gitStatusNameColor: Color? {
         guard let status = gitStatus else { return nil }
         switch status {
-        case .modified: return Color(nsColor: .systemOrange)
-        case .added, .untracked: return Color(nsColor: .systemGreen)
-        case .deleted: return Color(nsColor: .systemRed)
-        case .conflict: return Color(nsColor: .systemRed)
-        case .renamed: return Color(nsColor: .systemBlue)
+        case .modified: return theme.gitModified
+        case .added, .untracked: return theme.gitAdded
+        case .deleted: return theme.gitDeleted
+        case .conflict: return theme.gitDeleted
+        case .renamed: return theme.gitRenamed
         }
     }
 
@@ -304,7 +304,7 @@ struct FileTreeNodeView: View {
             return Color.accentColor.opacity(0.14)
         }
         if isHovered {
-            return (theme?.surfaceBackground ?? Color(nsColor: .windowBackgroundColor)).opacity(0.72)
+            return theme.hoverBackground
         }
         return .clear
     }
@@ -317,7 +317,7 @@ struct FileTreeNodeView: View {
             return Color.accentColor.opacity(0.30)
         }
         if isHovered {
-            return (theme?.border ?? Color(nsColor: .separatorColor)).opacity(0.7)
+            return theme.border.opacity(0.7)
         }
         return .clear
     }
@@ -343,6 +343,7 @@ struct FileTreeNodeView: View {
 
 private struct GitStatusBadge: View {
     let status: GitFileStatus
+    @Environment(\.mossTheme) private var theme
 
     var body: some View {
         Text(label)
@@ -367,10 +368,10 @@ private struct GitStatusBadge: View {
 
     private var color: Color {
         switch status {
-        case .modified: Color(nsColor: .systemOrange)
-        case .added, .untracked: Color(nsColor: .systemGreen)
-        case .deleted, .conflict: Color(nsColor: .systemRed)
-        case .renamed: Color(nsColor: .systemBlue)
+        case .modified: theme.gitModified
+        case .added, .untracked: theme.gitAdded
+        case .deleted, .conflict: theme.gitDeleted
+        case .renamed: theme.gitRenamed
         }
     }
 }

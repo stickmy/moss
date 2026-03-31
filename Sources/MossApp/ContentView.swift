@@ -38,6 +38,18 @@ struct ContentView: View {
         return sessionManager.sessions.first
     }
 
+    /// How much of the canvas's left side is covered by the preview panel overlay.
+    private var previewPanelOverlap: CGFloat {
+        guard showFileTree,
+              let session = activeFileTreeSession,
+              session.fileTreeModel.selectedFile != nil
+        else { return 0 }
+        // Preview panel (500px) is positioned at fileTreeWidth + 12 from the HStack leading edge.
+        // The canvas starts at fileTreeWidth + 11 (divider width) from the HStack leading edge.
+        // Overlap on the canvas = 500 + 12 - 11 = 501.
+        return 501
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             if showFileTree, let session = activeFileTreeSession {
@@ -58,7 +70,8 @@ struct ContentView: View {
 
             TerminalCanvasView(
                 sessionManager: sessionManager,
-                appearanceFocusedSessionId: appearanceFocusedSessionId
+                appearanceFocusedSessionId: appearanceFocusedSessionId,
+                overlayLeadingInset: previewPanelOverlap
             )
         }
         .overlay(alignment: .topLeading) {
@@ -85,6 +98,13 @@ struct ContentView: View {
             }
         }
         // Quick Open overlay
+        .overlay {
+            if showQuickOpen {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { showQuickOpen = false }
+            }
+        }
         .overlay(alignment: .top) {
             if showQuickOpen, let session = activeFileTreeSession {
                 QuickOpenPanel(
@@ -145,14 +165,18 @@ private struct ThemedWindowConfigurator: NSViewRepresentable {
     private func applyConfiguration(from view: NSView) {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
+
+            let appearance = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
+            NSApp.appearance = appearance
+            window.appearance = appearance
+
             window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = false
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
             window.isMovableByWindowBackground = false
             window.backgroundColor = NSColor(theme.background)
 
-            if #available(macOS 11.0, *) {
-                window.toolbarStyle = .unifiedCompact
-            }
+            NSLog("[ThemedWindowConfigurator] isDark=%d bg=(%@)", theme.isDark, window.backgroundColor?.description ?? "nil")
         }
     }
 }
@@ -172,7 +196,7 @@ struct PaneDivider: View {
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(theme?.border ?? Color(nsColor: .separatorColor))
+                .fill(theme.border)
                 .frame(width: Metrics.visualWidth)
         }
             .frame(width: Metrics.interactionWidth)

@@ -190,3 +190,60 @@ NotificationCenter.default.post(
 ```
 
 This also naturally ignores focus-loss events (clicking the file tree itself doesn't post the notification), so the file tree stays stable when interacting with it.
+
+---
+
+## 7. Pointer Cursor on Buttons — NSViewRepresentable Overlay Approaches All Fail
+
+### Symptom
+Buttons need a pointing-hand cursor on hover. The naive `onHover` + `NSCursor.push()/pop()` approach can cause cursor stack imbalances (e.g., if the view is removed while hovered, `pop()` never fires).
+
+### Failed Approaches
+
+All NSViewRepresentable-based approaches were tried and failed:
+
+1. **`.overlay { PointerCursorView() }`** — NSView sits on top, cursor rects work, but **blocks all click events** (SwiftUI's hit testing finds the NSView first and never delivers the event to the button underneath).
+
+2. **`.overlay` + `hitTest(_:)` returns `nil`** — Clicks pass through, but **cursor rects stop working**. AppKit's cursor rect machinery apparently skips views that return nil from hitTest, despite docs suggesting they're independent systems.
+
+3. **`.background { PointerCursorView() }`** — Clicks work, cursor works on views without an NSView behind them (e.g., canvas controls). But **fails over terminal surfaces and code previews** — the foreground NSView's cursor rects (I-beam) take precedence over the background NSView's cursor rects.
+
+4. **`.overlay` + `.allowsHitTesting(false)` (SwiftUI modifier)** — **Crashes the app** with `EXC_BREAKPOINT` in `ViewLayoutEngine.explicitAlignment`. Applying `.allowsHitTesting(false)` to an NSViewRepresentable confuses SwiftUI's layout engine.
+
+### Fix
+Use pure SwiftUI `onContinuousHover` — no NSView involved:
+
+```swift
+extension View {
+    func pointerCursor() -> some View {
+        self.onContinuousHover { phase in
+            switch phase {
+            case .active:
+                NSCursor.pointingHand.push()
+            case .ended:
+                NSCursor.pop()
+            }
+        }
+    }
+}
+```
+
+This works because:
+- No NSView overlay → no hit testing conflict → clicks always reach buttons
+- `onContinuousHover` reliably provides `.active`/`.ended` phases
+- SwiftUI fires `.ended` when the view is removed from the hierarchy, preventing cursor stack imbalance
+- Works everywhere regardless of underlying NSView layers (terminal, code preview, etc.)
+
+### Why not `pointerStyle(.link)` (macOS 15+)?
+
+Apple's `pointerStyle` is the intended pointer API (WWDC24), but it has significant limitations on macOS:
+- **Only works on native interactive controls** (`Button`, etc.) — views using `.onTapGesture` don't get the cursor change
+- **Doesn't work in certain overlay contexts** (e.g., popover-style dropdowns positioned via `.offset()`)
+
+Until `pointerStyle` coverage improves, `onContinuousHover` is the pragmatic choice for a universal `.pointerCursor()` modifier.
+
+### References
+
+- [Apple HIG — Pointing devices](https://developer.apple.com/design/human-interface-guidelines/pointing-devices)
+- [WWDC24 — What's new in SwiftUI](https://developer.apple.com/videos/play/wwdc2024/10144/)
+- [Apple Cocoa Event Handling Guide — Using Tracking-Area Objects](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/TrackingAreaObjects/TrackingAreaObjects.html)

@@ -11,34 +11,6 @@ enum GitFileStatus: String {
     case conflict = "U"
 }
 
-// MARK: - FSEvents Helper
-
-/// Weak reference wrapper for safe FSEvents callback routing.
-private final class FSEventsHelper: @unchecked Sendable {
-    weak var model: FileTreeModel?
-    init(model: FileTreeModel) { self.model = model }
-}
-
-/// Module-level C callback for FSEvents.
-private let fileTreeFSCallback: FSEventStreamCallback = {
-    (_, clientCallBackInfo, numEvents, eventPaths, _, _) in
-    guard let clientCallBackInfo else { return }
-    let helper = Unmanaged<FSEventsHelper>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
-    guard let model = helper.model else { return }
-
-    let cfArray = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
-    var paths: [String] = []
-    for i in 0..<CFArrayGetCount(cfArray) {
-        if let val = CFArrayGetValueAtIndex(cfArray, i) {
-            paths.append(Unmanaged<CFString>.fromOpaque(val).takeUnretainedValue() as String)
-        }
-    }
-
-    DispatchQueue.main.async {
-        model.handleFSEvents(paths: paths)
-    }
-}
-
 // MARK: - FileTreeModel
 
 @MainActor
@@ -57,17 +29,14 @@ final class FileTreeModel {
     /// Git status for files, keyed by absolute path.
     var gitStatus: [String: GitFileStatus] = [:]
 
-    /// FSEvents stream for watching file system changes.
-    private nonisolated(unsafe) var fsEventStreamRef: FSEventStreamRef?
-    private nonisolated(unsafe) var fsEventsHelperRetained: Unmanaged<FSEventsHelper>?
+    private let watcher = FileSystemWatcher()
 
     init(rootPath: String) {
         self.rootPath = rootPath
+        watcher.onChange = { [weak self] paths in
+            self?.handleFSEvents(paths: paths)
+        }
         reload()
-    }
-
-    deinit {
-        stopWatching()
     }
 
     func updateRootPath(_ newPath: String) {
@@ -87,7 +56,7 @@ final class FileTreeModel {
                 self?.rootEntries = entries
                 self?.loadedChildren[path] = entries
                 self?.isLoading = false
-                self?.startWatching()
+                self?.watcher.start(path: path)
                 self?.refreshGitStatus()
             }
         }
@@ -147,56 +116,9 @@ final class FileTreeModel {
         }
     }
 
-    // MARK: - File System Watching (FSEvents)
+    // MARK: - FSEvents Handling
 
-    func startWatching() {
-        stopWatching()
-        let path = rootPath.replacingOccurrences(of: "~", with: NSHomeDirectory())
-        let pathsToWatch = [path] as CFArray
-
-        let helper = FSEventsHelper(model: self)
-        let retained = Unmanaged.passRetained(helper)
-        fsEventsHelperRetained = retained
-
-        var context = FSEventStreamContext(
-            version: 0,
-            info: retained.toOpaque(),
-            retain: nil,
-            release: nil,
-            copyDescription: nil
-        )
-
-        guard let stream = FSEventStreamCreate(
-            nil,
-            fileTreeFSCallback,
-            &context,
-            pathsToWatch,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            1.5,
-            UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents)
-        ) else {
-            retained.release()
-            fsEventsHelperRetained = nil
-            return
-        }
-
-        FSEventStreamScheduleWithRunLoop(stream, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
-        FSEventStreamStart(stream)
-        fsEventStreamRef = stream
-    }
-
-    nonisolated func stopWatching() {
-        if let stream = fsEventStreamRef {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
-            fsEventStreamRef = nil
-        }
-        fsEventsHelperRetained?.release()
-        fsEventsHelperRetained = nil
-    }
-
-    func handleFSEvents(paths: [String]) {
+    private func handleFSEvents(paths: [String]) {
         var affectedDirs: Set<String> = []
         for path in paths {
             let dir = (path as NSString).deletingLastPathComponent
@@ -235,86 +157,11 @@ final class FileTreeModel {
     func refreshGitStatus() {
         let path = rootPath.replacingOccurrences(of: "~", with: NSHomeDirectory())
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let statusMap = Self.parseGitStatus(in: path)
+            let statusMap = GitStatusProvider.status(in: path)
             DispatchQueue.main.async {
                 self?.gitStatus = statusMap
             }
         }
-    }
-
-    private static func parseGitStatus(in directory: String) -> [String: GitFileStatus] {
-        // Find git root first
-        let rootPipe = Pipe()
-        let rootProcess = Process()
-        rootProcess.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        rootProcess.arguments = ["rev-parse", "--show-toplevel"]
-        rootProcess.currentDirectoryURL = URL(fileURLWithPath: directory)
-        rootProcess.standardOutput = rootPipe
-        rootProcess.standardError = Pipe()
-
-        var gitRoot = directory
-        do {
-            try rootProcess.run()
-            rootProcess.waitUntilExit()
-            let rootData = rootPipe.fileHandleForReading.readDataToEndOfFile()
-            if let root = String(data: rootData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines), !root.isEmpty
-            {
-                gitRoot = root
-            }
-        } catch {
-            return [:]
-        }
-
-        // Get porcelain status
-        let pipe = Pipe()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["status", "--porcelain", "-uall"]
-        process.currentDirectoryURL = URL(fileURLWithPath: directory)
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return [:]
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8) else { return [:] }
-
-        var result: [String: GitFileStatus] = [:]
-
-        for line in output.components(separatedBy: "\n") where line.count >= 4 {
-            let indexStatus = line[line.index(line.startIndex, offsetBy: 0)]
-            let workTreeStatus = line[line.index(line.startIndex, offsetBy: 1)]
-            let filePath = String(line.dropFirst(3))
-
-            let absPath = (gitRoot as NSString).appendingPathComponent(filePath)
-
-            let status: GitFileStatus
-            if indexStatus == "?" && workTreeStatus == "?" {
-                status = .untracked
-            } else if indexStatus == "A" || workTreeStatus == "A" {
-                status = .added
-            } else if indexStatus == "D" || workTreeStatus == "D" {
-                status = .deleted
-            } else if indexStatus == "R" || workTreeStatus == "R" {
-                status = .renamed
-            } else if indexStatus == "U" || workTreeStatus == "U" {
-                status = .conflict
-            } else if indexStatus == "M" || workTreeStatus == "M" {
-                status = .modified
-            } else {
-                continue
-            }
-
-            result[absPath] = status
-        }
-
-        return result
     }
 
     /// Returns the git status for a node. For directories, inherits from children.

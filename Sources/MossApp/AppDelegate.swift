@@ -19,7 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         super.init()
     }
 
-    func applicationDidFinishLaunching(_: Notification) {}
+    func applicationDidFinishLaunching(_: Notification) {
+        AgentNotificationManager.shared.requestPermission()
+    }
 
     func applicationWillTerminate(_: Notification) {
         sessionManager.saveCanvasSnapshot()
