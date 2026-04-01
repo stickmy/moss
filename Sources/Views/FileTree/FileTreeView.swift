@@ -60,6 +60,7 @@ struct FileTreeView: View {
                     .font(.system(size: 12, weight: .medium))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                let _ = model.changeToken
                 FileTreeKeyboardHost(model: model, theme: theme) {
                     List {
                         ForEach(model.rootEntries) { node in
@@ -267,10 +268,7 @@ struct FileTreeNodeView: View {
             .onHover { hovering in
                 isHovered = hovering
             }
-            .onTapGesture(count: 2) {
-                ExternalEditorOpener.openInPreferredEditor(node.url)
-            }
-            .onTapGesture(count: 1) {
+            .onTapGesture {
                 model.focusedPath = node.url.path
                 model.selectedFile = node.url
             }

@@ -51,8 +51,6 @@ Moss 的核心场景是 **vibe coding 时的多 agent 协调与监控**：同时
 
 ### 4. 智能注意力路由
 
-- 自动高亮等待时间最长的终端
-- **"Jump to next waiting"** 快捷键（如 `Cmd+J`），按等待时长排序跳转
 - 卡片上显示等待时长（"waiting 2m"），帮助优先处理
 - 可选：agent 进入 waiting 状态时自动平移视口
 
@@ -86,8 +84,6 @@ Moss 的核心场景是 **vibe coding 时的多 agent 协调与监控**：同时
 保存和恢复工作阵型：
 
 - 每个终端的初始目录、画布位置
-- 可选启动命令（自动执行 `claude` 并带上 prompt）
-- 模板示例："frontend + backend + tests" 三 agent 预设
 - 一键恢复，不用每次手动开 N 个终端
 
 ### 8. 终端分组 / 标签

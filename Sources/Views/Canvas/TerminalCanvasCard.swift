@@ -118,6 +118,13 @@ struct TerminalCanvasCard: View {
 
                     if !session.trackedTasks.isEmpty {
                         TaskProgressIndicator(tasks: session.trackedTasks)
+                    } else if let activity = session.activitySummary {
+                        Text(activity)
+                            .font(.caption2)
+                            .foregroundStyle(theme.secondaryForeground)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(activity)
                     }
 
                     Spacer(minLength: 0)

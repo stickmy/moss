@@ -29,6 +29,9 @@ final class FileTreeModel {
     /// Git status for files, keyed by absolute path.
     var gitStatus: [String: GitFileStatus] = [:]
 
+    /// Incremented on every FSEvent batch to force view re-evaluation.
+    var changeToken: Int = 0
+
     private let watcher = FileSystemWatcher()
 
     init(rootPath: String) {
@@ -130,10 +133,13 @@ final class FileTreeModel {
             }
         }
 
+        guard !affectedDirs.isEmpty else { return }
+
         for dir in affectedDirs {
             reloadDirectory(dir)
         }
 
+        changeToken &+= 1
         refreshGitStatus()
     }
 

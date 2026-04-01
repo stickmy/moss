@@ -25,6 +25,7 @@ struct TerminalCanvasView: View {
     @State private var keyMonitor: EventMonitor?
     @State private var canvasHover = CanvasHoverRef()
     @State private var canvasSizeRef = CanvasSizeRef()
+    @State private var zoomRestoreViewport: TerminalCanvasViewport?
 
     private var canvasStore: TerminalCanvasStore { sessionManager.canvasStore }
 
@@ -124,7 +125,7 @@ struct TerminalCanvasView: View {
                 createNewSession()
             }
             .onReceive(NotificationCenter.default.publisher(for: .terminalToggleZoom)) { _ in
-                fitFocusedSession()
+                toggleZoomFocusedSession()
             }
             .onReceive(NotificationCenter.default.publisher(for: .terminalFocusRequested)) { notif in
                 guard let sessionId = notif.userInfo?["sessionId"] as? UUID,
@@ -183,7 +184,7 @@ struct TerminalCanvasView: View {
     // MARK: - Controls
 
     private var canvasControls: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             AgentStatusOverview(sessions: sessionManager.sessions)
 
             if sessionManager.sessions.contains(where: { $0.status != .none }) {
@@ -193,20 +194,20 @@ struct TerminalCanvasView: View {
             }
 
             Text("\(Int(canvasStore.viewport.scale * 100))%")
-                .font(.caption.monospacedDigit())
+                .font(.caption2.monospacedDigit())
                 .foregroundStyle(sessionManager.theme.secondaryForeground)
 
-            CanvasControlButton(systemImage: "minus", action: { zoom(by: 0.9) })
-            CanvasControlButton(systemImage: "plus", action: { zoom(by: 1.1) })
-            CanvasControlButton(label: "Reset", action: {
+            CanvasControlButton(systemImage: "minus", shortcutHint: "⌘−", action: { zoom(by: 0.9) })
+            CanvasControlButton(systemImage: "plus", shortcutHint: "⌘+", action: { zoom(by: 1.1) })
+            CanvasControlButton(label: "Reset", shortcutHint: "⌘0", action: {
                 canvasStore.fitAllViewport(in: canvasSize, leadingInset: overlayLeadingInset)
             })
-            CanvasControlButton(label: "Fit", action: { fitFocusedSession() })
+            CanvasControlButton(label: "Fit", shortcutHint: "⌘⇧↩", action: { fitFocusedSession() })
                 .opacity(currentFocusTarget == nil ? 0.4 : 1)
                 .disabled(currentFocusTarget == nil)
         }
-        .font(.caption)
-        .padding(.horizontal, 10)
+        .font(.caption2)
+        .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay {
@@ -256,6 +257,20 @@ struct TerminalCanvasView: View {
     private func fitFocusedSession() {
         guard let target = currentFocusTarget else { return }
         fitViewport(to: target)
+    }
+
+    private func toggleZoomFocusedSession() {
+        guard let target = currentFocusTarget else { return }
+
+        if let restore = zoomRestoreViewport {
+            // Restore previous viewport
+            zoomRestoreViewport = nil
+            canvasStore.setViewport(restore)
+        } else {
+            // Save current viewport, then fit
+            zoomRestoreViewport = canvasStore.viewport
+            fitViewport(to: target)
+        }
     }
 
     private func fitViewport(to session: TerminalSession) {
@@ -472,7 +487,10 @@ struct TerminalCanvasView: View {
 private struct CanvasControlButton: View {
     var systemImage: String?
     var label: String?
+    var shortcutHint: String?
     let action: () -> Void
+
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -484,11 +502,30 @@ private struct CanvasControlButton: View {
                     Text(label)
                 }
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 4)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointerCursor()
+        .onHover { isHovered = $0 }
+        .overlay(alignment: .bottom) {
+            if isHovered, let shortcutHint {
+                Text(shortcutHint)
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(.black.opacity(0.75))
+                    )
+                    .fixedSize()
+                    .offset(y: 28)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                    .animation(.easeOut(duration: 0.1), value: isHovered)
+            }
+        }
     }
 }

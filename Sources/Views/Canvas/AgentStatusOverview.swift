@@ -16,13 +16,13 @@ struct AgentStatusOverview: View {
 
     var body: some View {
         if !statusCounts.isEmpty {
-            HStack(spacing: 8) {
+            HStack(spacing: 5) {
                 ForEach(statusCounts, id: \.0) { status, count in
-                    HStack(spacing: 3) {
+                    HStack(spacing: 2) {
                         Circle()
                             .fill(theme.color(for: status))
-                            .frame(width: 6, height: 6)
-                        Text("\(count) \(status.rawValue)")
+                            .frame(width: 5, height: 5)
+                        Text("\(count)")
                             .font(.caption2)
                             .foregroundStyle(theme.secondaryForeground)
                     }

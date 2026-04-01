@@ -32,6 +32,8 @@ final class TerminalSession: Identifiable {
     private nonisolated(unsafe) var gitWatcher: DispatchSourceFileSystemObject?
     var agentSessionId: String?
     var trackedTasks: [TrackedTask] = []
+    /// One-line dynamic summary shown in card header (e.g. prompt text, waiting reason).
+    var activitySummary: String?
 
     /// Per-session file tree state (expansion, selected file) — persists across focus switches.
     private var _fileTreeModel: FileTreeModel?
@@ -67,6 +69,9 @@ final class TerminalSession: Identifiable {
 
     func setAutomaticStatus(_ status: AgentStatus) {
         automaticStatus = status
+        if status == .running {
+            activitySummary = nil
+        }
         updateDisplayedStatus()
     }
 
@@ -99,7 +104,14 @@ final class TerminalSession: Identifiable {
     func startAgentSession(id: String) {
         guard agentSessionId != id else { return }
         agentSessionId = id
+        activitySummary = nil
         resetTrackedTasks()
+    }
+
+    // MARK: - Activity Summary
+
+    func setActivity(_ text: String?) {
+        activitySummary = text?.isEmpty == true ? nil : text
     }
 
     // MARK: - Task Tracking

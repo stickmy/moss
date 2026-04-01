@@ -28,7 +28,7 @@ struct MossCLI {
 
     static func handleAgent(_ args: [String]) {
         guard args.count >= 1 else {
-            fputs("Usage: moss agent <status|session|task> ...\n", stderr)
+            fputs("Usage: moss agent <status|session|task|activity> ...\n", stderr)
             exit(1)
         }
 
@@ -39,6 +39,9 @@ struct MossCLI {
             handleAgentSession(Array(args.dropFirst()))
         case "task":
             handleAgentTask(Array(args.dropFirst()))
+        case "activity":
+            let text = args.dropFirst().joined(separator: " ")
+            sendCommand(command: "set_activity", value: text.isEmpty ? nil : text)
         default:
             fputs("Unknown agent subcommand: \(args[0])\n", stderr)
             exit(1)
@@ -189,13 +192,21 @@ struct MossCLI {
             trySendCommand(command: "set_auto_status", value: "running")
 
         case "UserPromptSubmit":
+            let prompt = json["prompt"] as? String
             trySendCommand(command: "set_auto_status", value: "running")
+            if let prompt, !prompt.isEmpty {
+                trySendCommand(command: "set_activity", value: prompt)
+            }
 
         case "Notification":
             let notificationType = json["notification_type"] as? String ?? ""
+            let message = json["message"] as? String
             switch notificationType {
             case "permission_prompt", "idle_prompt", "elicitation_dialog":
                 trySendCommand(command: "set_auto_status", value: "waiting")
+                if let message, !message.isEmpty {
+                    trySendCommand(command: "set_activity", value: message)
+                }
             default:
                 break
             }
@@ -285,6 +296,7 @@ struct MossCLI {
           agent task created <id> <subject>                     Track a new task
           agent task completed <id>                             Mark a task as done
           agent task reset                                      Clear all tracked tasks
+          agent activity <text>                                  Set activity summary (empty to clear)
           hook claude install                                   Install Claude Code hooks
           hook claude uninstall                                 Remove Claude Code hooks
           help                                                  Show this help

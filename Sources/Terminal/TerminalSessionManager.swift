@@ -218,6 +218,10 @@ final class TerminalSessionManager {
             session.resetTrackedTasks()
             return IPCResponse(success: true, message: "Tasks reset")
 
+        case "set_activity":
+            session.setActivity(command.value)
+            return IPCResponse(success: true, message: "Activity updated")
+
         default:
             return IPCResponse(
                 success: false,

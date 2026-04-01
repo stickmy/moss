@@ -20,6 +20,23 @@ swift build --target MossCLI
 
 There are no tests or linting configured.
 
+**SPM package resolution issue**: If you get "Unable to find module dependency" errors (e.g. `TreeSitter`, `GhosttyKit`), the SPM package cache is corrupted. Fix:
+
+```bash
+# Close Xcode first, then:
+rm -rf Moss.xcodeproj
+rm -rf ~/Library/Developer/Xcode/DerivedData/Moss-*
+xcodegen generate
+open Moss.xcodeproj
+# Wait for "Resolving Package Graph..." to finish, then ⌘B
+```
+
+**Tree-sitter linker errors** (`Undefined symbol: _tree_sitter_xxx_external_scanner_create`): Several tree-sitter grammar packages (`tree-sitter-css`, `tree-sitter-javascript`, `tree-sitter-python`, `tree-sitter-yaml`) updated their `Package.swift` to use `FileManager.default.fileExists(atPath: "src/scanner.c")` to conditionally compile the scanner. This check uses a relative path that only works when SPM's working directory is the package root — **Xcode sets a different working directory**, so the check fails and `scanner.c` is silently excluded, causing undefined symbol errors at link time.
+
+**Fix**: Pin these packages to revisions where `scanner.c` is unconditionally listed in `sources:` (no `fileExists` check). The pinned revisions are recorded in `project.yml`. **Do not change these packages to `branch: master`** — they will break again. If you need to update a tree-sitter grammar, first verify that the new revision's `Package.swift` does NOT use `fileExists` for scanner detection.
+
+**YAML duplicate key trap**: `project.yml` has a single `dependencies:` key under the `Moss` target containing all SPM packages, the `MossCLI` target, and SDK frameworks. **Never add a second `dependencies:` key** — YAML silently overwrites the first with the second, dropping all SPM package references and causing "Unable to find module dependency" errors for every package.
+
 ## Architecture
 
 Moss is a multi-terminal macOS app that uses **libghostty's C API directly** (via `GhosttyKit` from `libghostty-spm`). It does NOT use the higher-level `GhosttyTerminal` Swift wrapper — all ghostty interaction goes through C functions like `ghostty_surface_key()`, `ghostty_config_get()`, etc.

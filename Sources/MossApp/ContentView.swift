@@ -94,7 +94,7 @@ struct ContentView: View {
                 .shadow(color: .black.opacity(0.35), radius: 24, x: -4, y: 8)
                 .padding(.leading, fileTreeWidth + 12)
                 .padding(.vertical, 16)
-                .transition(.move(edge: .leading).combined(with: .opacity))
+                .transition(.identity)
             }
         }
         // Quick Open overlay
@@ -124,7 +124,7 @@ struct ContentView: View {
             }
         }
         .animation(nil, value: showQuickOpen)
-        .animation(.easeInOut(duration: 0.2), value: showFileTree ? activeFileTreeSession?.fileTreeModel.selectedFile : nil)
+        .animation(nil, value: showFileTree ? activeFileTreeSession?.fileTreeModel.selectedFile : nil)
         .background(sessionManager.theme.background)
         .environment(\.mossTheme, sessionManager.theme)
         .background(

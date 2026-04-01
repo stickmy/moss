@@ -61,7 +61,7 @@ final class FileSystemWatcher {
             &context,
             pathsToWatch,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            1.5,
+            0.3,
             UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents)
         ) else {
             retained.release()

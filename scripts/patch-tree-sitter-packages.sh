@@ -1,9 +1,20 @@
 #!/bin/bash
 # Patches tree-sitter grammar packages that use FileManager.default.fileExists
 # for conditional scanner.c inclusion. This dynamic check fails in Xcode's
-# package resolution because the CWD isn't the package root.
+# package resolution because the CWD isn't the package root, so scanner.c
+# is silently excluded and you get linker errors like:
+#   Undefined symbol: _tree_sitter_xxx_external_scanner_create
 #
-# Run this after SPM re-resolves packages (e.g. after cleaning DerivedData).
+# Current fix: project.yml pins these packages to revisions before the
+# fileExists check was introduced. This script is NOT needed for normal builds.
+#
+# When to use this script:
+#   If you need to upgrade a tree-sitter grammar to a newer revision that uses
+#   the fileExists pattern, run this script after package resolution to patch
+#   the checked-out Package.swift in DerivedData.
+#
+# Affected packages (as of 2026-04): css, javascript, python, yaml
+# See CLAUDE.md "Tree-sitter linker errors" for full details.
 
 set -euo pipefail
 

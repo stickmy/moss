@@ -168,7 +168,6 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         var envPairs: [(String, String)] = [
             ("MOSS_SOCKET_PATH", socketPath ?? ""),
             ("MOSS_SURFACE_ID", sessionId?.uuidString ?? ""),
-            ("MOSS_CLI_PATH", Self.resolveMossCLIPath() ?? ""),
         ]
 
         if let resourcesPath, !resourcesPath.isEmpty {
@@ -255,38 +254,6 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             "leaf=\(leafId?.uuidString ?? "nil") metalLayer=\(debugObjectID(metalLayer)) " +
             "frame=\(debugRect(metalLayer.frame))"
         )
-    }
-
-    private static func resolveMossCLIPath() -> String? {
-        let fm = FileManager.default
-
-        if let override = ProcessInfo.processInfo.environment["MOSS_CLI_PATH"],
-           fm.isExecutableFile(atPath: override)
-        {
-            return override
-        }
-
-        let bundleCandidates: [String?] = [
-            Bundle.main.bundleURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("moss")
-                .path,
-            Bundle.main.executableURL?
-                .deletingLastPathComponent()
-                .appendingPathComponent("moss")
-                .path,
-            Bundle.main.sharedSupportURL?
-                .appendingPathComponent("moss")
-                .path,
-        ]
-
-        for candidate in bundleCandidates.compactMap({ $0 }) {
-            if fm.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-
-        return nil
     }
 
     private func synchronizeMetrics() {
