@@ -161,6 +161,7 @@ final class TerminalSplitNSView: NSView {
         }
 
         updateUnfocusedOverlays()
+        updateDividerTrackingAreas()
         setNeedsDisplay(bounds)
     }
 
@@ -249,9 +250,6 @@ final class TerminalSplitNSView: NSView {
             startMousePos: mousePos,
             currentRatio: divider.currentRatio
         )
-
-        let cursor: NSCursor = divider.direction == .horizontal ? .resizeLeftRight : .resizeUpDown
-        cursor.push()
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -281,48 +279,48 @@ final class TerminalSplitNSView: NSView {
             ratio: drag.currentRatio
         )
         activeDrag = nil
-        NSCursor.pop()
     }
 
     // MARK: - Cursor Tracking
 
-    private var isCursorOverDivider = false
+    private var dividerTrackingAreas: [NSTrackingArea] = []
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas {
+    private func updateDividerTrackingAreas() {
+        for area in dividerTrackingAreas {
             removeTrackingArea(area)
         }
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
+        dividerTrackingAreas = dividerInfos.map { info in
+            NSTrackingArea(
+                rect: info.hitRect,
+                options: [.activeInKeyWindow, .mouseEnteredAndExited, .cursorUpdate],
+                owner: self,
+                userInfo: ["direction": info.direction == .horizontal ? "h" : "v"]
+            )
+        }
+        for area in dividerTrackingAreas {
+            addTrackingArea(area)
+        }
     }
 
-    override func mouseMoved(with event: NSEvent) {
+    override func cursorUpdate(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if let divider = dividerAtPoint(point) {
-            if !isCursorOverDivider {
-                let cursor: NSCursor = divider.direction == .horizontal ? .resizeLeftRight : .resizeUpDown
-                cursor.push()
-                isCursorOverDivider = true
-            }
+            let cursor: NSCursor = divider.direction == .horizontal ? .resizeLeftRight : .resizeUpDown
+            cursor.set()
         } else {
-            if isCursorOverDivider {
-                NSCursor.pop()
-                isCursorOverDivider = false
-            }
+            super.cursorUpdate(with: event)
         }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard let info = event.trackingArea?.userInfo,
+              let dir = info["direction"] as? String else { return }
+        let cursor: NSCursor = dir == "h" ? .resizeLeftRight : .resizeUpDown
+        cursor.set()
     }
 
     override func mouseExited(with event: NSEvent) {
-        if isCursorOverDivider {
-            NSCursor.pop()
-            isCursorOverDivider = false
-        }
+        NSCursor.arrow.set()
     }
 }
 

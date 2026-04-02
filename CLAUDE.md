@@ -4,23 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
+See `BUILD.md` for full build guide including prerequisites and troubleshooting.
+
 ```bash
-# Generate Xcode project (required after changing project.yml or adding/removing source files)
 xcodegen generate
-
-# Build the app
 xcodebuild -project Moss.xcodeproj -scheme Moss -configuration Debug build
-
-# Build and run (app binary location)
-open ~/Library/Developer/Xcode/DerivedData/Moss-*/Build/Products/Debug/Moss.app
-
-# Build CLI tool
 swift build --target MossCLI
 ```
 
 There are no tests or linting configured.
 
-**SPM package resolution issue**: If you get "Unable to find module dependency" errors (e.g. `TreeSitter`, `GhosttyKit`), the SPM package cache is corrupted. Fix:
+**SPM package resolution issue**: If you get "Unable to find module dependency" errors (e.g. `TreeSitter`), the SPM package cache is corrupted. Fix:
 
 ```bash
 # Close Xcode first, then:
@@ -37,9 +31,18 @@ open Moss.xcodeproj
 
 **YAML duplicate key trap**: `project.yml` has a single `dependencies:` key under the `Moss` target containing all SPM packages, the `MossCLI` target, and SDK frameworks. **Never add a second `dependencies:` key** — YAML silently overwrites the first with the second, dropping all SPM package references and causing "Unable to find module dependency" errors for every package.
 
+**Updating GhosttyKit**: The vendored xcframework at `Vendor/GhosttyKit.xcframework/` contains `libghostty.a` + `ghostty.h` built from [Ghostty source](https://github.com/ghostty-org/ghostty). To update:
+
+```bash
+# Requires: zig (https://ziglang.org/download/) and a ghostty source checkout
+./Vendor/build-ghostty.sh /path/to/ghostty
+```
+
+This builds universal (arm64 + x86_64) `libghostty.a` from source and updates the vendored files in-place. The `module.modulemap` renames the C module from `libghostty` to `GhosttyKit` so Swift code uses `import GhosttyKit`. Do not overwrite it when updating manually.
+
 ## Architecture
 
-Moss is a multi-terminal macOS app that uses **libghostty's C API directly** (via `GhosttyKit` from `libghostty-spm`). It does NOT use the higher-level `GhosttyTerminal` Swift wrapper — all ghostty interaction goes through C functions like `ghostty_surface_key()`, `ghostty_config_get()`, etc.
+Moss is a multi-terminal macOS app that uses **libghostty's C API directly** (via vendored `GhosttyKit.xcframework` in `Vendor/`). It does NOT use the higher-level `GhosttyTerminal` Swift wrapper — all ghostty interaction goes through C functions like `ghostty_surface_key()`, `ghostty_config_get()`, etc.
 
 ### Core Layers
 
@@ -70,7 +73,7 @@ Moss is a multi-terminal macOS app that uses **libghostty's C API directly** (vi
 
 ### Reference Codebase
 
-The official Ghostty macOS app at `/Users/shiki/workspace/ghostty/` is the primary reference for libghostty usage patterns. The C API header is at `ghostty/include/ghostty.h`.
+The official Ghostty macOS app ([ghostty-org/ghostty](https://github.com/ghostty-org/ghostty)) is the primary reference for libghostty usage patterns. The C API header is at `ghostty/include/ghostty.h`.
 
 ## Known Issues
 

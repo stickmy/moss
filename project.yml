@@ -7,9 +7,6 @@ options:
   createIntermediateGroups: true
 
 packages:
-  libghostty-spm:
-    url: https://github.com/Lakr233/libghostty-spm.git
-    branch: main
   swift-tree-sitter:
     url: https://github.com/tree-sitter/swift-tree-sitter
     branch: main
@@ -94,8 +91,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Moss
     dependencies:
       - target: MossCLI
-      - package: libghostty-spm
-        product: GhosttyKit
+      - framework: Vendor/GhosttyKit.xcframework
+        embed: false
       - package: swift-tree-sitter
         product: SwiftTreeSitter
       - package: swift-tree-sitter
@@ -133,6 +130,7 @@ targets:
       - sdk: Cocoa.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
+      - sdk: Carbon.framework
 
   MossCLI:
     type: tool

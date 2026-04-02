@@ -188,7 +188,7 @@ struct TerminalCanvasCard: View {
     }
 
     private var interactiveResizeHandles: [TerminalCanvasResizeHandle] {
-        TerminalCanvasResizeHandle.allCases.filter { $0 != .north }
+        TerminalCanvasResizeHandle.allCases
     }
 }
 
@@ -211,6 +211,7 @@ private struct TerminalCanvasResizeHandleView: View {
     let actions: TerminalCanvasCardActions
 
     @State private var resizeStartRect: CGRect?
+    @State private var isHovered = false
 
     var body: some View {
         Rectangle()
@@ -225,9 +226,15 @@ private struct TerminalCanvasResizeHandleView: View {
             }
             .onHover { hovering in
                 if hovering {
-                    handleCursor.push()
-                } else if resizeStartRect == nil {
-                    NSCursor.pop()
+                    if !isHovered {
+                        handleCursor.push()
+                        isHovered = true
+                    }
+                } else {
+                    if isHovered && resizeStartRect == nil {
+                        NSCursor.pop()
+                        isHovered = false
+                    }
                 }
             }
             .gesture(resizeGesture)
@@ -253,7 +260,13 @@ private struct TerminalCanvasResizeHandleView: View {
             .onEnded { _ in
                 resizeStartRect = nil
                 actions.onInteractionChanged(false)
-                NSCursor.pop()
+                if isHovered {
+                    // Still hovering — keep the resize cursor visible
+                } else {
+                    // Mouse left during drag — pop the cursor now
+                    NSCursor.pop()
+                    isHovered = false
+                }
             }
     }
 

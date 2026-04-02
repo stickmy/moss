@@ -35,7 +35,7 @@ struct ContentView: View {
             return fileTreeSession
         }
 
-        return sessionManager.sessions.first
+        return focusedSession ?? sessionManager.sessions.first
     }
 
     /// How much of the canvas's left side is covered by the preview panel overlay.

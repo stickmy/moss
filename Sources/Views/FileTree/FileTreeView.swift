@@ -230,7 +230,13 @@ struct FileTreeNodeView: View {
             DisclosureGroup(
                 isExpanded: Binding(
                     get: { model.isExpanded(node) },
-                    set: { model.setExpanded(node, $0) }
+                    set: { newValue in
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            model.setExpanded(node, newValue)
+                        }
+                    }
                 )
             ) {
                 if let children = model.children(of: node) {

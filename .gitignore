@@ -1,3 +1,4 @@
 .build/
 Moss.xcodeproj/
 .DS_Store
+Vendor/.build/
