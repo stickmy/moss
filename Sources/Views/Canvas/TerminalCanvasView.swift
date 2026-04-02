@@ -192,26 +192,26 @@ struct TerminalCanvasView: View {
 
             if sessionManager.sessions.contains(where: { $0.status == .waiting }) {
                 Divider()
-                    .frame(height: 12)
+                    .frame(height: 14)
                     .opacity(0.5)
             }
 
             Text("\(Int(canvasStore.viewport.scale * 100))%")
-                .font(.caption2.monospacedDigit())
+                .font(.caption.monospacedDigit())
                 .foregroundStyle(sessionManager.theme.secondaryForeground)
 
             CanvasControlButton(systemImage: "minus", shortcutHint: "⌘−", action: { zoom(by: 0.9) })
             CanvasControlButton(systemImage: "plus", shortcutHint: "⌘+", action: { zoom(by: 1.1) })
-            CanvasControlButton(label: "Reset", shortcutHint: "⌘0", action: {
+            CanvasControlButton(systemImage: "square.grid.2x2", shortcutHint: "⌘0", action: {
                 canvasStore.fitAllViewport(in: canvasSize, leadingInset: overlayLeadingInset)
             })
-            CanvasControlButton(label: "Fit", shortcutHint: "⌘⇧↩", action: { fitFocusedSession() })
+            CanvasControlButton(systemImage: "viewfinder", shortcutHint: "⌘⇧↩", action: { fitFocusedSession() })
                 .opacity(currentFocusTarget == nil ? 0.4 : 1)
                 .disabled(currentFocusTarget == nil)
         }
-        .font(.caption2)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay {
             Capsule()
@@ -493,21 +493,20 @@ private struct CanvasControlButton: View {
     var shortcutHint: String?
     let action: () -> Void
 
+    @Environment(\.mossTheme) private var theme
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            Group {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .font(.caption)
-                } else if let label {
-                    Text(label)
-                }
-            }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
+            Image(systemName: systemImage ?? "questionmark")
+                .font(.system(size: 12))
+                .frame(width: 26, height: 26)
+            .contentShape(Circle())
+            .background(
+                Circle()
+                    .fill(theme.foreground.opacity(isHovered ? 0.1 : 0))
+            )
+            .animation(.easeOut(duration: 0.15), value: isHovered)
         }
         .buttonStyle(.plain)
         .pointerCursor()
