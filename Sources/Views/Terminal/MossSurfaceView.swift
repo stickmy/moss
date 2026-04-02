@@ -168,6 +168,7 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         var envPairs: [(String, String)] = [
             ("MOSS_SOCKET_PATH", socketPath ?? ""),
             ("MOSS_SURFACE_ID", sessionId?.uuidString ?? ""),
+            ("MOSS_CLI_PATH", AppDelegate.cliInstallPath),
         ]
 
         if let resourcesPath, !resourcesPath.isEmpty {

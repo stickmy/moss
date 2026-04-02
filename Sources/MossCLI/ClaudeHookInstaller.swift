@@ -125,7 +125,14 @@ enum ClaudeHookInstaller {
     // MARK: - Helpers
 
     private static func resolveExecutablePath() -> String {
-        // Prefer the stable symlink path installed by Moss.app
+        // Prefer the per-instance CLI path set by Moss.app
+        if let cliPath = ProcessInfo.processInfo.environment["MOSS_CLI_PATH"],
+           FileManager.default.isExecutableFile(atPath: cliPath)
+        {
+            return cliPath
+        }
+
+        // Fallback: stable symlink
         let installed = NSHomeDirectory() + "/.local/bin/moss"
         if FileManager.default.isExecutableFile(atPath: installed) {
             return installed

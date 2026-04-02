@@ -33,8 +33,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     
     // MARK: - CLI Installation
 
-    /// Symlinks the bundled `moss` CLI to `~/.local/bin/moss` so it's available
-    /// outside of Moss terminals (e.g. Claude Code hooks, other terminal apps).
+    private static let cliName: String = {
+        #if DEBUG
+        return "moss-debug"
+        #else
+        return "moss"
+        #endif
+    }()
+
+    /// The install path for the CLI binary (e.g. `~/.local/bin/moss` or `~/.local/bin/moss-debug`).
+    static let cliInstallPath: String = {
+        NSHomeDirectory() + "/.local/bin/" + cliName
+    }()
+
+    /// Symlinks the bundled `moss` CLI to `~/.local/bin/moss` (or `moss-debug` for debug builds)
+    /// so it's available outside of Moss terminals (e.g. Claude Code hooks, other terminal apps).
     /// Inside Moss terminals, the CLI is already available via shell integration alias.
     private func installCLI() {
         guard let resourceURL = Bundle.main.resourceURL else { return }
@@ -42,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         guard FileManager.default.isExecutableFile(atPath: bundledCLI.path) else { return }
 
         let installDir = NSHomeDirectory() + "/.local/bin"
-        let installPath = "\(installDir)/moss"
+        let installPath = Self.cliInstallPath
         let fm = FileManager.default
 
         if let dest = try? fm.destinationOfSymbolicLink(atPath: installPath),

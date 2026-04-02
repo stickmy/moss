@@ -185,9 +185,12 @@ struct TerminalCanvasView: View {
 
     private var canvasControls: some View {
         HStack(spacing: 4) {
-            AgentStatusOverview(sessions: sessionManager.sessions)
+            AgentStatusOverview(sessions: sessionManager.sessions) { session in
+                fitViewport(to: session)
+                focusSession(session)
+            }
 
-            if sessionManager.sessions.contains(where: { $0.status != .none }) {
+            if sessionManager.sessions.contains(where: { $0.status == .waiting }) {
                 Divider()
                     .frame(height: 12)
                     .opacity(0.5)

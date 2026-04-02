@@ -7,46 +7,51 @@ struct FileTreeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Search trigger — clicking opens QuickOpen panel
-            Button {
-                NotificationCenter.default.post(name: .quickOpenRequested, object: nil)
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(theme.secondaryForeground)
+            HStack(spacing: 6) {
+                // Search trigger — clicking opens QuickOpen panel
+                Button {
+                    NotificationCenter.default.post(name: .quickOpenRequested, object: nil)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(theme.secondaryForeground)
 
-                    Text("Search files…")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(theme.secondaryForeground)
+                        Text("Search files…")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(theme.secondaryForeground)
 
-                    Spacer()
+                        Spacer()
 
-                    Text("⌘P")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(theme.secondaryForeground.opacity(0.6))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(theme.surfaceBackground.opacity(0.6))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .stroke(theme.border.opacity(0.4), lineWidth: 0.5)
-                        )
+                        Text("⌘P")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(theme.secondaryForeground.opacity(0.6))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(theme.surfaceBackground.opacity(0.6))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .stroke(theme.border.opacity(0.4), lineWidth: 0.5)
+                            )
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(searchFieldBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(searchFieldBorder, lineWidth: 1)
+                    }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(searchFieldBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(searchFieldBorder, lineWidth: 1)
-                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+
+                // Refresh button — re-scans files and git status
+                RefreshButton(model: model)
             }
-            .buttonStyle(.plain)
-            .pointerCursor()
             .padding(.horizontal, 8)
             .padding(.top, 8)
             .padding(.bottom, 4)
@@ -82,6 +87,44 @@ struct FileTreeView: View {
 
     private var searchFieldBorder: Color {
         theme.borderSubtle
+    }
+}
+
+// MARK: - Refresh Button
+
+private struct RefreshButton: View {
+    let model: FileTreeModel
+    @Environment(\.mossTheme) private var theme
+    @State private var isHovered = false
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        Button {
+            model.refresh()
+            withAnimation(.easeInOut(duration: 0.5)) {
+                rotation += 360
+            }
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(theme.secondaryForeground)
+                .rotationEffect(.degrees(rotation))
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isHovered ? theme.hoverBackground : .clear)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isHovered ? theme.borderMedium : .clear, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .help("Refresh files and git status")
     }
 }
 

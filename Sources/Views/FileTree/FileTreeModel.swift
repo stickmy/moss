@@ -158,6 +158,32 @@ final class FileTreeModel {
         }
     }
 
+    // MARK: - Manual Refresh
+
+    /// Re-scans all loaded directories and refreshes git status without collapsing the tree.
+    func refresh() {
+        let path = rootPath.replacingOccurrences(of: "~", with: NSHomeDirectory())
+        let dirsToReload = Array(loadedChildren.keys)
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var updated: [String: [FileNode]] = [:]
+            for dir in dirsToReload {
+                updated[dir] = Self.scanChildren(of: URL(fileURLWithPath: dir))
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for (dir, children) in updated {
+                    self.loadedChildren[dir] = children
+                    if dir == path {
+                        self.rootEntries = children
+                    }
+                }
+                self.changeToken &+= 1
+                self.refreshGitStatus()
+            }
+        }
+    }
+
     // MARK: - Git Status
 
     func refreshGitStatus() {
