@@ -57,6 +57,15 @@ struct ZoomedTerminalView: View {
                 VStack(spacing: 0) {
                     TerminalSplitContentView(session: session)
                 }
+                .overlay(alignment: .topTrailing) {
+                    if let searchState = session.searchState {
+                        TerminalSearchOverlay(
+                            searchState: searchState,
+                            onNavigate: { session.navigateSearch($0) },
+                            onClose: { session.endSearch() }
+                        )
+                    }
+                }
             }
         }
         .overlay {

@@ -5,8 +5,13 @@ import GhosttyKit
 /// These are stateless functions — no dependency on MossSurfaceView instance state.
 enum GhosttyInput {
     /// Build a ghostty key event from an NSEvent.
+    /// - Parameter translationMods: If provided, used for consumed_mods calculation
+    ///   instead of the event's own modifiers. This is needed for macos-option-as-alt:
+    ///   when Option is translated away, consumed_mods must NOT include ALT, otherwise
+    ///   ghostty thinks Alt was consumed and won't generate escape sequences.
     static func buildKeyEvent(
-        _ event: NSEvent, action: ghostty_input_action_e
+        _ event: NSEvent, action: ghostty_input_action_e,
+        translationMods: NSEvent.ModifierFlags? = nil
     ) -> ghostty_input_key_s {
         var key = ghostty_input_key_s()
         key.action = action
@@ -15,7 +20,7 @@ enum GhosttyInput {
         key.composing = false
         key.mods = mods(event.modifierFlags)
         key.consumed_mods = mods(
-            event.modifierFlags.subtracting([.control, .command])
+            (translationMods ?? event.modifierFlags).subtracting([.control, .command])
         )
         key.unshifted_codepoint = 0
         if event.type == .keyDown || event.type == .keyUp {
@@ -36,6 +41,15 @@ enum GhosttyInput {
         if flags.contains(.option) { raw |= GHOSTTY_MODS_ALT.rawValue }
         if flags.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
         if flags.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
+
+        // Right-side modifier detection via device-specific masks.
+        // Needed for macos-option-as-alt = left|right to work correctly.
+        let rawFlags = flags.rawValue
+        if rawFlags & UInt(NX_DEVICERSHIFTKEYMASK) != 0 { raw |= GHOSTTY_MODS_SHIFT_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERCTLKEYMASK) != 0 { raw |= GHOSTTY_MODS_CTRL_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERALTKEYMASK) != 0 { raw |= GHOSTTY_MODS_ALT_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERCMDKEYMASK) != 0 { raw |= GHOSTTY_MODS_SUPER_RIGHT.rawValue }
+
         return ghostty_input_mods_e(raw)
     }
 

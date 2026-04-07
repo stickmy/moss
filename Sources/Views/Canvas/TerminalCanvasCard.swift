@@ -37,6 +37,15 @@ struct TerminalCanvasCard: View {
         cardSurface(showFitButton: true) {
             TerminalSplitContentView(session: session)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    if let searchState = session.searchState {
+                        TerminalSearchOverlay(
+                            searchState: searchState,
+                            onNavigate: { session.navigateSearch($0) },
+                            onClose: { session.endSearch() }
+                        )
+                    }
+                }
         }
         .frame(width: screenRect.width, height: screenRect.height)
         .overlay {

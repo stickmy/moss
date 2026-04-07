@@ -12,6 +12,11 @@ protocol MossSurfaceViewDelegate: AnyObject {
     func surfaceDidAcknowledgePendingAttention()
     func surfaceDidRequestSplit(_ direction: SplitDirection, surface: MossSurfaceView)
     func surfaceDidClose(processAlive: Bool, surface: MossSurfaceView)
+    func surfaceDidRequestStartSearch(needle: String?, surface: MossSurfaceView)
+    func surfaceDidRequestEndSearch(surface: MossSurfaceView)
+    func surfaceDidReceiveEndSearch()
+    func surfaceDidUpdateSearchTotal(_ total: UInt?)
+    func surfaceDidUpdateSearchSelected(_ selected: UInt?)
 }
 
 // MARK: - MossSurfaceView
@@ -445,7 +450,15 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             return true
         }
 
-        // Non-binding Cmd combos → send to ghostty (paste, copy, etc.)
+        // Non-binding, non-Cmd/Ctrl events should fall through to keyDown.
+        // This is critical for Alt combos — without this, super.performKeyEquivalent
+        // can swallow Option+key events (macOS treats them as potential menu shortcuts).
+        if !event.modifierFlags.contains(.command) &&
+           !event.modifierFlags.contains(.control) {
+            return false
+        }
+
+        // Non-binding Cmd/Ctrl combos → send to ghostty (paste, copy, etc.)
         if event.modifierFlags.contains(.command) {
             if GhosttyInput.isPasteKeyEquivalent(event) {
                 acknowledgePendingAttention()
@@ -515,14 +528,14 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         if let texts = keyTextAccumulator, !texts.isEmpty {
             for text in texts {
-                var key = GhosttyInput.buildKeyEvent(event, action: action)
+                var key = GhosttyInput.buildKeyEvent(event, action: action, translationMods: translatedFlags)
                 text.withCString { ptr in
                     key.text = ptr
                     _ = ghostty_surface_key(surface, key)
                 }
             }
         } else {
-            var key = GhosttyInput.buildKeyEvent(event, action: action)
+            var key = GhosttyInput.buildKeyEvent(event, action: action, translationMods: translatedFlags)
             let text = GhosttyInput.characters(from: translationEvent)
             key.composing = markedText.length > 0 || markedBefore
 
@@ -778,9 +791,27 @@ final class MossSurfaceView: NSView, NSTextInputClient {
             NotificationCenter.default.post(name: .terminalNewRequested, object: nil)
         case GHOSTTY_ACTION_NEW_WINDOW:
             NotificationCenter.default.post(name: .terminalNewRequested, object: nil)
+        case GHOSTTY_ACTION_START_SEARCH:
+            let needle = action.action.start_search.needle.map { String(cString: $0) }
+            delegate?.surfaceDidRequestStartSearch(needle: needle, surface: self)
+        case GHOSTTY_ACTION_END_SEARCH:
+            delegate?.surfaceDidReceiveEndSearch()
+        case GHOSTTY_ACTION_SEARCH_TOTAL:
+            let total: UInt? = action.action.search_total.total >= 0
+                ? UInt(action.action.search_total.total) : nil
+            delegate?.surfaceDidUpdateSearchTotal(total)
+        case GHOSTTY_ACTION_SEARCH_SELECTED:
+            let selected: UInt? = action.action.search_selected.selected >= 0
+                ? UInt(action.action.search_selected.selected) : nil
+            delegate?.surfaceDidUpdateSearchSelected(selected)
         default:
             break
         }
+    }
+
+    func performBindingAction(_ action: String) {
+        guard let surface else { return }
+        ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
     }
 
     func handleClose(processAlive: Bool) {

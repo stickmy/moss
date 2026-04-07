@@ -35,6 +35,10 @@ final class TerminalSession: Identifiable {
     /// One-line dynamic summary shown in card header (e.g. prompt text, waiting reason).
     var activitySummary: String?
 
+    /// Search state — non-nil when search overlay is active.
+    var searchState: TerminalSearchState?
+    @ObservationIgnored private var searchDebounceTask: Task<Void, Never>?
+
     /// Per-session file tree state (expansion, selected file) — persists across focus switches.
     private var _fileTreeModel: FileTreeModel?
     var fileTreeModel: FileTreeModel {
@@ -398,9 +402,102 @@ extension TerminalSession: MossSurfaceViewDelegate {
         guard let leafId = surface.leafId else { return }
         closeSurface(leafId)
     }
+
+    func surfaceDidRequestStartSearch(needle: String?, surface: MossSurfaceView) {
+        if let searchState {
+            if let needle, !needle.isEmpty {
+                searchState.needle = needle
+            }
+            searchState.focusToken = UUID()
+        } else {
+            let state = TerminalSearchState()
+            state.needle = needle ?? ""
+            state.onNeedleChanged = { [weak self, weak surface] newNeedle in
+                guard let surface else { return }
+                self?.debouncedSearch(newNeedle, surface: surface)
+            }
+            searchState = state
+        }
+    }
+
+    func surfaceDidRequestEndSearch(surface: MossSurfaceView) {
+        guard searchState != nil else { return }
+        clearSearchState()
+        surface.performBindingAction("end_search")
+        // Return focus to terminal surface
+        surface.window?.makeFirstResponder(surface)
+    }
+
+    /// Called from ghostty's GHOSTTY_ACTION_END_SEARCH callback — just clear UI, don't re-send or steal focus.
+    func surfaceDidReceiveEndSearch() {
+        guard searchState != nil else { return }
+        clearSearchState()
+    }
+
+    func surfaceDidUpdateSearchTotal(_ total: UInt?) {
+        searchState?.total = total
+    }
+
+    func surfaceDidUpdateSearchSelected(_ selected: UInt?) {
+        searchState?.selected = selected
+    }
+
+    // MARK: - Search (public API for views)
+
+    func navigateSearch(_ direction: String) {
+        guard let activeSurfaceId else { return }
+        let surfaceView = surfaceView(for: activeSurfaceId)
+        surfaceView.performBindingAction("navigate_search:\(direction)")
+    }
+
+    func endSearch() {
+        guard let activeSurfaceId else { return }
+        let surfaceView = surfaceView(for: activeSurfaceId)
+        surfaceDidRequestEndSearch(surface: surfaceView)
+    }
+
+    // MARK: - Search (private)
+
+    private func clearSearchState() {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = nil
+        searchState = nil
+    }
+
+    private func debouncedSearch(_ needle: String, surface: MossSurfaceView) {
+        searchDebounceTask?.cancel()
+        if needle.isEmpty || needle.count >= 3 {
+            surface.performBindingAction("search:\(needle)")
+        } else {
+            searchDebounceTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                surface.performBindingAction("search:\(needle)")
+            }
+        }
+    }
 }
 
 extension Notification.Name {
     static let terminalSessionClosed = Notification.Name("terminalSessionClosed")
     static let trackedTasksChanged = Notification.Name("trackedTasksChanged")
+}
+
+// MARK: - Search State
+
+@MainActor
+@Observable
+final class TerminalSearchState {
+    var needle: String = "" {
+        didSet {
+            guard needle != oldValue else { return }
+            onNeedleChanged?(needle)
+        }
+    }
+    var selected: UInt?
+    var total: UInt?
+    /// Changes each time the search field should reclaim focus.
+    var focusToken = UUID()
+
+    @ObservationIgnored var onNeedleChanged: ((String) -> Void)?
 }
