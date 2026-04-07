@@ -388,13 +388,18 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
     // MARK: - Key Events
 
-    /// Handle key events that need priority over the responder chain.
-    /// Ghostty keybindings are checked first via ghostty_surface_key_is_binding.
+    /// Timestamp of the last Cmd/Ctrl event we returned false for in performKeyEquivalent.
+    /// Used for the two-pass mechanism: first pass lets AppKit try menu shortcuts,
+    /// second pass (same timestamp) forwards to keyDown. See official Ghostty docs for details.
+    private var lastPerformKeyEvent: TimeInterval?
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
 
-        // App-level shortcuts work regardless of focus
+        // Moss app-level shortcuts that must take priority over ghostty bindings.
+        // These have no ghostty equivalent or need app-level handling.
         if event.modifierFlags.contains(.command) {
+            // Cmd+Q: quit app (ghostty has its own quit binding that wouldn't terminate NSApp)
             if event.keyCode == 0x0C, !event.modifierFlags.contains(.shift) {
                 NSApplication.shared.terminate(nil)
                 return true
@@ -403,16 +408,8 @@ final class MossSurfaceView: NSView, NSTextInputClient {
                 NotificationCenter.default.post(name: .terminalToggleZoom, object: nil)
                 return true
             }
-            if event.keyCode == 0x2D, !event.modifierFlags.contains(.shift) {
-                NotificationCenter.default.post(name: .terminalNewRequested, object: nil)
-                return true
-            }
             if event.keyCode == 0x0B, !event.modifierFlags.contains(.shift) {
                 NotificationCenter.default.post(name: .terminalToggleFileTree, object: nil)
-                return true
-            }
-            if event.keyCode == 0x23, !event.modifierFlags.contains(.shift) {
-                NotificationCenter.default.post(name: .quickOpenRequested, object: nil)
                 return true
             }
         }
@@ -428,54 +425,81 @@ final class MossSurfaceView: NSView, NSTextInputClient {
         let isBinding: Bool = (event.characters ?? "").withCString { ptr in
             ghosttyEvent.text = ptr
             var flags = ghostty_binding_flags_e(0)
-            let result = ghostty_surface_key_is_binding(surface, ghosttyEvent, &flags)
-            return result
+            return ghostty_surface_key_is_binding(surface, ghosttyEvent, &flags)
         }
 
+        // Bindings go through keyDown for proper text extraction and option-as-alt handling.
         if isBinding {
             if GhosttyInput.isPasteKeyEquivalent(event) {
                 acknowledgePendingAttention()
             }
-            // Send directly to ghostty to execute the binding
-            var key = GhosttyInput.buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
-            let chars = event.characters ?? ""
-            if !chars.isEmpty, let cp = chars.utf8.first, cp >= 0x20 {
-                chars.withCString { ptr in
-                    key.text = ptr
-                    _ = ghostty_surface_key(surface, key)
-                }
-            } else {
-                _ = ghostty_surface_key(surface, key)
-            }
+            self.keyDown(with: event)
             return true
         }
 
-        // Non-binding, non-Cmd/Ctrl events should fall through to keyDown.
-        // This is critical for Alt combos — without this, super.performKeyEquivalent
-        // can swallow Option+key events (macOS treats them as potential menu shortcuts).
-        if !event.modifierFlags.contains(.command) &&
-           !event.modifierFlags.contains(.control) {
+        // Non-binding: handle special Ctrl cases that macOS mishandles.
+        let equivalent: String
+        switch event.charactersIgnoringModifiers {
+        case "\r":
+            // Ctrl+Return: intercept to prevent macOS context menu equivalent
+            guard event.modifierFlags.contains(.control) else { return false }
+            equivalent = "\r"
+
+        case "/":
+            // Ctrl+/: remap to Ctrl+_ to prevent macOS beep
+            guard event.modifierFlags.contains(.control),
+                  event.modifierFlags.isDisjoint(with: [.shift, .command, .option])
+            else { return false }
+            equivalent = "_"
+
+        default:
+            // Ignore synthetic events (zero timestamp)
+            if event.timestamp == 0 { return false }
+
+            // Non-Cmd/Ctrl events always go to keyDown via normal AppKit dispatch.
+            if !event.modifierFlags.contains(.command) &&
+               !event.modifierFlags.contains(.control) {
+                lastPerformKeyEvent = nil
+                return false
+            }
+
+            // Two-pass mechanism for Cmd/Ctrl events:
+            // Pass 1: return false to let AppKit try menu shortcuts.
+            // Pass 2 (same timestamp): AppKit didn't handle it, forward to keyDown.
+            if let last = lastPerformKeyEvent {
+                self.lastPerformKeyEvent = nil
+                if last == event.timestamp {
+                    equivalent = event.characters ?? ""
+                    break
+                }
+            }
+
+            lastPerformKeyEvent = event.timestamp
             return false
         }
 
-        // Non-binding Cmd/Ctrl combos → send to ghostty (paste, copy, etc.)
-        if event.modifierFlags.contains(.command) {
-            if GhosttyInput.isPasteKeyEquivalent(event) {
-                acknowledgePendingAttention()
-            }
-            var key = GhosttyInput.buildKeyEvent(event, action: GHOSTTY_ACTION_PRESS)
-            key.text = nil
-            return ghostty_surface_key(surface, key)
-        }
-
-        return super.performKeyEquivalent(with: event)
+        // Construct event with corrected characters and route through keyDown.
+        let finalEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: event.locationInWindow,
+            modifierFlags: event.modifierFlags,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            characters: equivalent,
+            charactersIgnoringModifiers: equivalent,
+            isARepeat: event.isARepeat,
+            keyCode: event.keyCode
+        )
+        self.keyDown(with: finalEvent!)
+        return true
     }
 
     override func keyDown(with event: NSEvent) {
-        guard let surface else { return }
-
-        // Cmd combos are handled by performKeyEquivalent
-        if event.modifierFlags.contains(.command) { return }
+        guard let surface else {
+            interpretKeyEvents([event])
+            return
+        }
 
         acknowledgePendingAttention()
 
@@ -514,6 +538,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 
         keyTextAccumulator = []
         defer { keyTextAccumulator = nil }
+
+        // Reset so interpretKeyEvents doesn't re-dispatch through performKeyEquivalent
+        // with a stale timestamp match.
+        self.lastPerformKeyEvent = nil
 
         interpretKeyEvents([translationEvent])
 
