@@ -101,16 +101,18 @@ final class FileTreeModel {
         let contents = (try? fm.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
+            options: []
         )) ?? []
 
-        return contents.map { childURL in
+        return contents.compactMap { childURL in
+            let name = childURL.lastPathComponent
             let isDir = (try? childURL.resourceValues(
                 forKeys: [.isDirectoryKey]
             ).isDirectory) ?? false
+            if isDir && ignoredDirectories.contains(name) { return nil }
             return FileNode(
                 url: childURL,
-                name: childURL.lastPathComponent,
+                name: name,
                 isDirectory: isDir
             )
         }.sorted { a, b in
@@ -322,7 +324,7 @@ final class FileTreeModel {
         guard let contents = try? fm.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else { return }
 
         for childURL in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
