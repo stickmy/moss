@@ -40,6 +40,8 @@ open Moss.xcodeproj
 
 This builds universal (arm64 + x86_64) `libghostty.a` from source and updates the vendored files in-place. The `module.modulemap` renames the C module from `libghostty` to `GhosttyKit` so Swift code uses `import GhosttyKit`. Do not overwrite it when updating manually.
 
+**Why not use the official `ghostty-vt.xcframework`?** Ghostty now publishes a prebuilt `ghostty-vt.xcframework` on the `tip` release ([ghostty-org/ghostty#12149](https://github.com/ghostty-org/ghostty/pull/12149)). This is a **VT-only** subset (`import GhosttyVt`) that only exposes terminal emulation/parsing APIs (`ghostty_terminal_new`, `ghostty_terminal_vt_write`, `ghostty_formatter_*`). It does **not** include the surface/rendering/app/config layer that Moss depends on (`ghostty_app_t`, `ghostty_surface_t`, `ghostty_config_t`, Metal rendering, input handling, clipboard, actions). Moss requires the full libghostty, so the local `build-ghostty.sh` workflow remains the only option.
+
 ## Architecture
 
 Moss is a multi-terminal macOS app that uses **libghostty's C API directly** (via vendored `GhosttyKit.xcframework` in `Vendor/`). It does NOT use the higher-level `GhosttyTerminal` Swift wrapper — all ghostty interaction goes through C functions like `ghostty_surface_key()`, `ghostty_config_get()`, etc.
