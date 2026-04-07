@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct QuickOpenPanel: View {
@@ -67,28 +66,31 @@ struct QuickOpenPanel: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 80)
             } else {
-                    ThemedScrollView(
-                    theme: theme,
-                    scrollToOffset: scrollOffsetFor(selectedIndex)
-                ) {
-                    VStack(spacing: 2) {
-                        ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
-                            QuickOpenRow(
-                                result: result,
-                                rootPath: rootPath,
-                                isSelected: index == selectedIndex,
-                                theme: theme
-                            )
-                            .onTapGesture {
-                                selectedIndex = index
-                                confirmSelection()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 2) {
+                            ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
+                                QuickOpenRow(
+                                    result: result,
+                                    rootPath: rootPath,
+                                    isSelected: index == selectedIndex,
+                                    theme: theme
+                                )
+                                .id(index)
+                                .onTapGesture {
+                                    selectedIndex = index
+                                    confirmSelection()
+                                }
                             }
                         }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .frame(maxHeight: 340)
+                    .onChange(of: selectedIndex) { _, newIndex in
+                        proxy.scrollTo(newIndex, anchor: .center)
+                    }
                 }
-                .frame(maxHeight: 340)
             }
         }
         .background(.ultraThinMaterial)
@@ -112,13 +114,6 @@ struct QuickOpenPanel: View {
         .onChange(of: query) { _, _ in
             selectedIndex = 0
         }
-    }
-
-    private func scrollOffsetFor(_ index: Int) -> CGFloat {
-        let rowHeight: CGFloat = 42 // row (~40px) + spacing (2px)
-        let visibleHeight: CGFloat = 340
-        let targetY = 6 + CGFloat(index) * rowHeight // 6 = top padding
-        return max(0, targetY - visibleHeight / 2 + rowHeight / 2)
     }
 
     private func moveSelection(_ delta: Int) {

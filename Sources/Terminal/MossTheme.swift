@@ -64,12 +64,6 @@ final class MossTheme {
     let diffRemoved: NSColor
     let diffHunk: NSColor
 
-    // MARK: - Scroller (NSColor for AppKit)
-
-    let scrollerThumb: NSColor
-    let scrollerThumbHover: NSColor
-    let scrollerThumbActive: NSColor
-
     // MARK: - Agent status
 
     let agentRunning: Color
@@ -213,14 +207,6 @@ final class MossTheme {
             self.diffRemoved = NSColor(srgbRed: 0.45, green: 0.12, blue: 0.12, alpha: 1)
             self.diffHunk = NSColor(srgbRed: 0.34, green: 0.67, blue: 0.92, alpha: 1)
         }
-
-        // Scroller
-        let scrollerBase: NSColor = isLight
-            ? NSColor(srgbRed: 17 / 255, green: 24 / 255, blue: 39 / 255, alpha: 1)
-            : .white
-        self.scrollerThumb = scrollerBase.withAlphaComponent(0.16)
-        self.scrollerThumbHover = scrollerBase.withAlphaComponent(0.24)
-        self.scrollerThumbActive = scrollerBase.withAlphaComponent(0.32)
 
         // Agent status
         self.agentRunning = Color(nsColor: .systemBlue)

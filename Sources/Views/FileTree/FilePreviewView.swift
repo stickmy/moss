@@ -8,6 +8,10 @@ private let imageExtensions: Set<String> = [
     "ico", "webp", "heic", "heif",
 ]
 
+private let markdownExtensions: Set<String> = [
+    "md", "markdown", "mdown", "mkd",
+]
+
 func debugLog(_ msg: String) {
     let line = "[\(Date())] \(msg)\n"
     if let data = line.data(using: .utf8) {
@@ -54,6 +58,9 @@ struct FilePreviewView: View {
                     wrapLines: wrapLines
                 )
 
+            case let .markdown(text):
+                MarkdownPreviewView(text: text)
+
             case let .image(nsImage):
                 ImagePreviewView(image: nsImage, fileName: url.lastPathComponent)
             }
@@ -97,7 +104,10 @@ struct FilePreviewView: View {
                     return
                 }
 
-                DispatchQueue.main.async { state = .loaded(text) }
+                let isMarkdown = markdownExtensions.contains(ext)
+                DispatchQueue.main.async {
+                    state = isMarkdown ? .markdown(text) : .loaded(text)
+                }
             } catch {
                 DispatchQueue.main.async { state = .error(error.localizedDescription) }
             }
@@ -112,6 +122,7 @@ struct FilePreviewView: View {
 private enum FilePreviewState {
     case loading
     case loaded(String)
+    case markdown(String)
     case image(NSImage)
     case error(String)
 }

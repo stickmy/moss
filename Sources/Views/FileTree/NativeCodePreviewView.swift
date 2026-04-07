@@ -38,9 +38,30 @@ final class CodePreviewScrollView: NSView {
     private static var scrollCache: [String: CGPoint] = [:]
 
     override init(frame frameRect: NSRect) {
-        let sv = NSTextView.scrollableTextView()
+        // Build the text system manually so we can use our ArrowCursorTextView
+        // subclass (suppresses I-beam cursor rects for read-only preview).
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let textContainer = NSTextContainer()
+        textContainer.widthTracksTextView = false
+        textContainer.heightTracksTextView = false
+        textContainer.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        layoutManager.addTextContainer(textContainer)
+
+        let tv = ArrowCursorTextView(frame: .zero, textContainer: textContainer)
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = true
+        tv.autoresizingMask = [.width]
+
+        let sv = NSScrollView()
+        sv.documentView = tv
+
         scrollView = sv
-        textView = sv.documentView as! NSTextView
+        textView = tv
         rulerView = LineNumberRulerView(textView: textView)
 
         super.init(frame: frameRect)
@@ -68,8 +89,6 @@ final class CodePreviewScrollView: NSView {
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         scrollView.drawsBackground = false
-        scrollView.horizontalScroller = ThemedOverlayScroller()
-        scrollView.verticalScroller = ThemedOverlayScroller()
 
         // Line numbers
         scrollView.hasVerticalRuler = true
@@ -128,8 +147,7 @@ final class CodePreviewScrollView: NSView {
         textView.backgroundColor = bgColor
         rulerView.backgroundColor = bgColor
         rulerView.textColor = NSColor(Color(theme.secondaryForeground)).withAlphaComponent(0.6)
-        (scrollView.horizontalScroller as? ThemedOverlayScroller)?.applyTheme(theme)
-        (scrollView.verticalScroller as? ThemedOverlayScroller)?.applyTheme(theme)
+
 
         // Build attributed string with syntax highlighting
         let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -422,4 +440,15 @@ final class LineNumberRulerView: NSRulerView {
     }
 
     override var isFlipped: Bool { true }
+}
+
+// MARK: - Arrow Cursor Text View
+
+/// NSTextView subclass that uses an arrow cursor instead of I-beam.
+/// Prevents cursor rect conflicts with SwiftUI overlays (dropdown menus, buttons)
+/// that float above this read-only preview.
+private final class ArrowCursorTextView: NSTextView {
+    override func resetCursorRects() {
+        addCursorRect(visibleRect, cursor: .arrow)
+    }
 }

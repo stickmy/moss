@@ -336,8 +336,6 @@ private final class FileDiffTextContainerView: NSView {
         scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
-        scrollView.horizontalScroller = ThemedOverlayScroller()
-        scrollView.verticalScroller = ThemedOverlayScroller()
         scrollView.documentView = textView
 
         addSubview(scrollView)
@@ -357,8 +355,7 @@ private final class FileDiffTextContainerView: NSView {
     func update(text: String, lines: [String], theme: MossTheme?) {
         let shouldResetScrollOrigin = previousText != text
         textView.update(text: text, lines: lines, theme: theme)
-        (scrollView.horizontalScroller as? ThemedOverlayScroller)?.applyTheme(theme)
-        (scrollView.verticalScroller as? ThemedOverlayScroller)?.applyTheme(theme)
+
         previousText = text
         needsLayout = true
         layoutSubtreeIfNeeded()

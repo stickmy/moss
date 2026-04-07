@@ -55,6 +55,8 @@ packages:
   tree-sitter-toml:
     url: https://github.com/tree-sitter-grammars/tree-sitter-toml
     branch: master
+  swift-markdown-ui:
+    path: ../swift-markdown-ui
 
 targets:
   Moss:
@@ -127,6 +129,8 @@ targets:
         product: TreeSitterMarkdown
       - package: tree-sitter-toml
         product: TreeSitterTOML
+      - package: swift-markdown-ui
+        product: MarkdownUI
       - sdk: Cocoa.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework

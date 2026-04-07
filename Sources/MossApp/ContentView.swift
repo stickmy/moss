@@ -7,7 +7,7 @@ struct ContentView: View {
     @State private var fileTreeSession: TerminalSession?
     @State private var lastFocusedSessionId: UUID?
     @State private var fileTreeWidth: CGFloat = 220
-    @State private var dragOffsetTree: CGFloat = 0
+    @State private var previewPanelWidth: CGFloat = 500
     @State private var showQuickOpen = false
 
     private var focusedSession: TerminalSession? {
@@ -44,54 +44,51 @@ struct ContentView: View {
               let session = activeFileTreeSession,
               session.fileTreeModel.selectedFile != nil
         else { return 0 }
-        // Preview panel (500px) is positioned at fileTreeWidth + 12 from the HStack leading edge.
-        // The canvas starts at fileTreeWidth + 11 (divider width) from the HStack leading edge.
-        // Overlap on the canvas = 500 + 12 - 11 = 501.
-        return 501
+        return previewPanelWidth + 1
+    }
+
+    private var leftContent: AnyView? {
+        guard showFileTree, let session = activeFileTreeSession else { return nil }
+        return AnyView(
+            FileTreeView(model: session.fileTreeModel)
+                .environment(\.mossTheme, sessionManager.theme)
+        )
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            if showFileTree, let session = activeFileTreeSession {
-                FileTreeView(model: session.fileTreeModel)
-                    .frame(width: fileTreeWidth)
-
-                PaneDivider(
-                    offset: dragOffsetTree,
-                    onDrag: { delta in
-                        dragOffsetTree = max(180 - fileTreeWidth, min(350 - fileTreeWidth, delta))
-                    },
-                    onDragEnd: {
-                        fileTreeWidth = max(180, min(350, fileTreeWidth + dragOffsetTree))
-                        dragOffsetTree = 0
-                    }
+        FileTreeSplitContainer(
+            leftContent: leftContent,
+            rightContent: AnyView(
+                TerminalCanvasView(
+                    sessionManager: sessionManager,
+                    appearanceFocusedSessionId: appearanceFocusedSessionId,
+                    overlayLeadingInset: previewPanelOverlap
                 )
-            }
-
-            TerminalCanvasView(
-                sessionManager: sessionManager,
-                appearanceFocusedSessionId: appearanceFocusedSessionId,
-                overlayLeadingInset: previewPanelOverlap
-            )
-        }
+                .environment(\.mossTheme, sessionManager.theme)
+            ),
+            dividerPosition: $fileTreeWidth,
+            minPosition: 180,
+            maxPosition: 350,
+            dividerColor: NSColor(sessionManager.theme.border)
+        )
         .overlay(alignment: .topLeading) {
             if showFileTree,
                let session = activeFileTreeSession,
                let selectedFile = session.fileTreeModel.selectedFile
             {
-                FilePreviewPanel(url: selectedFile) {
-                    session.fileTreeModel.selectedFile = nil
-                }
-                .frame(width: 500)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(
-                            (sessionManager.theme.border).opacity(0.5),
-                            lineWidth: 1
-                        )
-                }
-                .shadow(color: .black.opacity(0.35), radius: 24, x: -4, y: 8)
+                ResizablePanelContainer(
+                    content: AnyView(
+                        FilePreviewPanel(url: selectedFile) {
+                            session.fileTreeModel.selectedFile = nil
+                        }
+                        .environment(\.mossTheme, sessionManager.theme)
+                    ),
+                    width: $previewPanelWidth,
+                    minWidth: 300,
+                    maxWidth: 800,
+                    borderColor: NSColor(sessionManager.theme.border)
+                )
+                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 2)
                 .padding(.leading, fileTreeWidth + 12)
                 .padding(.vertical, 16)
                 .transition(.identity)
@@ -147,7 +144,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - PaneDivider
+// MARK: - Window Configurator
 
 private struct ThemedWindowConfigurator: NSViewRepresentable {
     let theme: MossTheme
@@ -178,58 +175,5 @@ private struct ThemedWindowConfigurator: NSViewRepresentable {
 
             NSLog("[ThemedWindowConfigurator] isDark=%d bg=(%@)", theme.isDark, window.backgroundColor?.description ?? "nil")
         }
-    }
-}
-
-struct PaneDivider: View {
-    private enum Metrics {
-        static let visualWidth: CGFloat = 1
-        static let interactionWidth: CGFloat = 11
-    }
-
-    var offset: CGFloat = 0
-    let onDrag: (_ totalDelta: CGFloat) -> Void
-    let onDragEnd: () -> Void
-    @Environment(\.mossTheme) private var theme
-    @State private var isShowingResizeCursor = false
-
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(theme.border)
-                .frame(width: Metrics.visualWidth)
-        }
-            .frame(width: Metrics.interactionWidth)
-            .contentShape(Rectangle())
-            .offset(x: offset)
-            .zIndex(10)
-            .onContinuousHover { phase in
-                switch phase {
-                case .active:
-                    guard !isShowingResizeCursor else { return }
-                    NSCursor.resizeLeftRight.push()
-                    isShowingResizeCursor = true
-                case .ended:
-                    releaseResizeCursor()
-                }
-            }
-            .onDisappear {
-                releaseResizeCursor()
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        onDrag(value.translation.width)
-                    }
-                    .onEnded { _ in
-                        onDragEnd()
-                    }
-            )
-    }
-
-    private func releaseResizeCursor() {
-        guard isShowingResizeCursor else { return }
-        NSCursor.pop()
-        isShowingResizeCursor = false
     }
 }
