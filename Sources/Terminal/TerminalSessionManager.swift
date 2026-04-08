@@ -19,6 +19,7 @@ final class TerminalSessionManager {
     private let terminalApp: MossTerminalApp
     private let socketServer: SocketServer
     private nonisolated(unsafe) var closeObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var focusObserver: NSObjectProtocol?
     let canvasStore: TerminalCanvasStore
 
     var theme: MossTheme { terminalApp.theme }
@@ -60,12 +61,30 @@ final class TerminalSessionManager {
             }
         }
 
+        // When a session gains focus, unfocus all others
+        focusObserver = NotificationCenter.default.addObserver(
+            forName: .terminalDidFocus,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let focusedSession = notification.object as? TerminalSession else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                for session in self.sessions where session.id != focusedSession.id {
+                    session.isFocused = false
+                }
+            }
+        }
+
         restoreSessionsFromSnapshot()
     }
 
     deinit {
         if let closeObserver {
             NotificationCenter.default.removeObserver(closeObserver)
+        }
+        if let focusObserver {
+            NotificationCenter.default.removeObserver(focusObserver)
         }
     }
 
@@ -110,6 +129,7 @@ final class TerminalSessionManager {
                 id: item.id,
                 launchDirectory: item.workingDirectory
             )
+            session.isMinimized = item.isMinimized
             if session.launchDirectory != item.workingDirectory {
                 canvasStore.updateWorkingDirectory(
                     id: item.id,

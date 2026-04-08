@@ -67,7 +67,7 @@ final class TerminalCanvasStore {
         )
     }
 
-    func fitAllViewport(in canvasSize: CGSize, leadingInset: CGFloat = 0) {
+    func fitAllViewport(in canvasSize: CGSize, leadingInset: CGFloat = 0, excludingIds: Set<UUID> = []) {
         guard !itemsById.isEmpty,
               canvasSize.width > 0,
               canvasSize.height > 0
@@ -76,11 +76,17 @@ final class TerminalCanvasStore {
             return
         }
 
-        let allRects = itemsById.values.map(\.rect)
-        let minX = allRects.map(\.minX).min()!
-        let minY = allRects.map(\.minY).min()!
-        let maxX = allRects.map(\.maxX).max()!
-        let maxY = allRects.map(\.maxY).max()!
+        let rects = itemsById.values
+            .filter { !excludingIds.contains($0.id) }
+            .map(\.rect)
+        guard !rects.isEmpty else {
+            setViewport(.default)
+            return
+        }
+        let minX = rects.map(\.minX).min()!
+        let minY = rects.map(\.minY).min()!
+        let maxX = rects.map(\.maxX).max()!
+        let maxY = rects.map(\.maxY).max()!
         let boundingRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
 
         let visibleWidth = max(1, canvasSize.width - leadingInset)
@@ -177,6 +183,13 @@ final class TerminalCanvasStore {
         scheduleSave()
     }
 
+    func updateMinimized(id: UUID, isMinimized: Bool) {
+        guard var item = itemsById[id], item.isMinimized != isMinimized else { return }
+        item.isMinimized = isMinimized
+        itemsById[id] = item
+        scheduleSave()
+    }
+
     func removeItem(id: UUID) {
         guard itemsById.removeValue(forKey: id) != nil else { return }
         if viewport.fittedSessionId == id {
@@ -255,7 +268,8 @@ final class TerminalCanvasStore {
                     id: item.id,
                     rect: sanitizedRect(item.rect),
                     workingDirectory: item.workingDirectory,
-                    createdOrder: item.createdOrder
+                    createdOrder: item.createdOrder,
+                    isMinimized: item.isMinimized
                 )
             }
         } catch {

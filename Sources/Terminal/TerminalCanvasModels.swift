@@ -24,6 +24,7 @@ struct TerminalCanvasItemSnapshot: Codable, Identifiable, Equatable {
     var rect: CGRect
     var workingDirectory: String?
     var createdOrder: Int
+    var isMinimized: Bool = false
 }
 
 struct TerminalCanvasLayoutHint {

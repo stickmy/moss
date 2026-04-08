@@ -408,6 +408,10 @@ final class MossSurfaceView: NSView, NSTextInputClient {
                 NotificationCenter.default.post(name: .terminalToggleZoom, object: nil)
                 return true
             }
+            if event.keyCode == 0x2E, event.modifierFlags.contains(.shift) {
+                NotificationCenter.default.post(name: .terminalMinimizeRequested, object: nil)
+                return true
+            }
             if event.keyCode == 0x0B, !event.modifierFlags.contains(.shift) {
                 NotificationCenter.default.post(name: .terminalToggleFileTree, object: nil)
                 return true
@@ -869,10 +873,12 @@ final class MossSurfaceView: NSView, NSTextInputClient {
 extension Notification.Name {
     static let terminalDidFocus = Notification.Name("terminalDidFocus")
     static let terminalToggleZoom = Notification.Name("terminalToggleZoom")
+    static let terminalMinimizeRequested = Notification.Name("terminalMinimizeRequested")
     static let terminalNewRequested = Notification.Name("terminalNewRequested")
     static let terminalToggleFileTree = Notification.Name("terminalToggleFileTree")
     static let terminalFocusChanged = Notification.Name("terminalFocusChanged")
     static let terminalFocusRequested = Notification.Name("terminalFocusRequested")
+    static let terminalFitAllRequested = Notification.Name("terminalFitAllRequested")
 }
 
 // MARK: - DisplayLinkTarget

@@ -23,6 +23,7 @@ final class TerminalSession: Identifiable {
     private var automaticStatus: AgentStatus = .none
     private var desktopNotificationPending = false
     var isFocused: Bool = false
+    var isMinimized: Bool = false
     var workingDirectory: String = "~"
     var gitBranch: String?
     var onClose: (() -> Void)?
@@ -373,6 +374,12 @@ extension TerminalSession: MossSurfaceViewDelegate {
         if focused, let leafId = surface.leafId {
             activeSurfaceId = leafId
             isFocused = true
+            // Unfocus all other sessions (handles minimized sessions whose
+            // surfaces can't receive resignFirstResponder)
+            NotificationCenter.default.post(
+                name: .terminalDidFocus,
+                object: self
+            )
         } else if !focused {
             // Only unfocus session if no other surface in this session has focus
             // (the new surface's becomeFirstResponder fires after resignFirstResponder)

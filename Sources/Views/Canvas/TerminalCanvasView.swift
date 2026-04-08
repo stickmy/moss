@@ -45,10 +45,11 @@ struct TerminalCanvasView: View {
                     emptyState
                 }
 
-                ForEach(sessionManager.orderedSessions) { session in
+                ForEach(Array(sessionManager.orderedSessions.enumerated()), id: \.element.id) { index, session in
                     if let item = canvasStore.item(for: session.id) {
                         TerminalCanvasCard(
                             session: session,
+                            displayNumber: index + 1,
                             logicalRect: item.rect,
                             screenRect: screenRect(for: item.rect, in: size),
                             scale: canvasStore.viewport.scale,
@@ -58,6 +59,8 @@ struct TerminalCanvasView: View {
                                 onFocus: { focusSession(session) },
                                 onFit: { fitViewport(to: session) },
                                 onClose: { sessionManager.removeSession(session) },
+                                onMinimize: { minimizeSession(session) },
+                                onRestore: { restoreSession(session) },
                                 onInteractionChanged: { isInteracting in
                                     interactingSessionId = isInteracting ? session.id : nil
                                 },
@@ -126,6 +129,14 @@ struct TerminalCanvasView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .terminalToggleZoom)) { _ in
                 toggleZoomFocusedSession()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .terminalMinimizeRequested)) { _ in
+                if let target = currentFocusTarget, !target.isMinimized {
+                    minimizeSession(target)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .terminalFitAllRequested)) { _ in
+                fitAll()
             }
             .onReceive(NotificationCenter.default.publisher(for: .terminalFocusRequested)) { notif in
                 guard let sessionId = notif.userInfo?["sessionId"] as? UUID,
@@ -203,7 +214,7 @@ struct TerminalCanvasView: View {
             CanvasControlButton(systemImage: "minus", shortcutHint: "⌘−", action: { zoom(by: 0.9) })
             CanvasControlButton(systemImage: "plus", shortcutHint: "⌘+", action: { zoom(by: 1.1) })
             CanvasControlButton(systemImage: "square.grid.2x2", shortcutHint: "⌘0", action: {
-                canvasStore.fitAllViewport(in: canvasSize, leadingInset: overlayLeadingInset)
+                fitAll()
             })
             CanvasControlButton(systemImage: "viewfinder", shortcutHint: "⌘⇧↩", action: { fitFocusedSession() })
                 .opacity(currentFocusTarget == nil ? 0.4 : 1)
@@ -277,7 +288,96 @@ struct TerminalCanvasView: View {
     }
 
     private func fitViewport(to session: TerminalSession) {
-        canvasStore.fitViewport(to: session.id, in: canvasSize, leadingInset: overlayLeadingInset)
+        guard let item = canvasStore.item(for: session.id) else { return }
+        let minimizedSessions = sessionManager.orderedSessions.filter(\.isMinimized)
+
+        if minimizedSessions.isEmpty {
+            canvasStore.fitViewport(to: session.id, in: canvasSize, leadingInset: overlayLeadingInset)
+            return
+        }
+
+        fitViewportToRect(item.rect, minimizedSessions: minimizedSessions, fittedSessionId: session.id)
+    }
+
+    private func fitAll() {
+        let minimizedSessions = sessionManager.orderedSessions.filter(\.isMinimized)
+        let nonMinimizedSessions = sessionManager.orderedSessions.filter { !$0.isMinimized }
+
+        if minimizedSessions.isEmpty {
+            canvasStore.fitAllViewport(in: canvasSize, leadingInset: overlayLeadingInset)
+            return
+        }
+
+        if nonMinimizedSessions.isEmpty {
+            canvasStore.fitAllViewport(in: canvasSize, leadingInset: overlayLeadingInset)
+            return
+        }
+
+        let rects = nonMinimizedSessions.compactMap { canvasStore.item(for: $0.id)?.rect }
+        guard !rects.isEmpty else { return }
+
+        let boundingRect = CGRect(
+            x: rects.map(\.minX).min()!,
+            y: rects.map(\.minY).min()!,
+            width: rects.map(\.maxX).max()! - rects.map(\.minX).min()!,
+            height: rects.map(\.maxY).max()! - rects.map(\.minY).min()!
+        )
+
+        fitViewportToRect(boundingRect, minimizedSessions: minimizedSessions, maxScale: 1.0)
+    }
+
+    /// Shared three-row layout: controls capsule → minimized row → content rect.
+    private func fitViewportToRect(
+        _ contentRect: CGRect,
+        minimizedSessions: [TerminalSession],
+        maxScale: CGFloat = TerminalCanvasMetrics.maxScale,
+        fittedSessionId: UUID? = nil
+    ) {
+        let visibleWidth = max(1, canvasSize.width - overlayLeadingInset)
+        let padding = TerminalCanvasMetrics.fitPadding
+
+        // Screen layout (top → bottom):
+        //   ~40px  controls capsule
+        //    ~8px  gap
+        //   ~48px  minimized cards row
+        //   ~16px  gap
+        //   rest   content
+        let topReserved: CGFloat = 112
+
+        let availableWidth = max(1, visibleWidth - padding * 2)
+        let availableHeight = max(1, canvasSize.height - topReserved - padding)
+        let fitScale = TerminalCanvasMetrics.clampedScale(min(
+            min(availableWidth / max(1, contentRect.width),
+                availableHeight / max(1, contentRect.height)),
+            maxScale
+        ))
+
+        // Pin content top edge at screen Y = topReserved
+        let offsetX = contentRect.midX - overlayLeadingInset / (2 * fitScale)
+        let offsetY = contentRect.minY - (topReserved - canvasSize.height / 2) / fitScale
+
+        // Position minimized cards centered in the reserved area (screen Y ≈ 48)
+        let minimizedScreenTop: CGFloat = 48
+        let minimizedLogicalY = offsetY + (minimizedScreenTop - canvasSize.height / 2) / fitScale
+
+        let minimizedSlotWidth = 420 / fitScale
+        let gap: CGFloat = 8 / fitScale
+        let totalWidth = CGFloat(minimizedSessions.count) * minimizedSlotWidth
+            + CGFloat(max(0, minimizedSessions.count - 1)) * gap
+        let startX = contentRect.midX - totalWidth / 2
+
+        for (i, minSession) in minimizedSessions.enumerated() {
+            guard var rect = canvasStore.item(for: minSession.id)?.rect else { continue }
+            rect.origin.x = startX + CGFloat(i) * (minimizedSlotWidth + gap)
+            rect.origin.y = minimizedLogicalY
+            canvasStore.updateRect(id: minSession.id, rect: rect)
+        }
+
+        canvasStore.setViewport(TerminalCanvasViewport(
+            offset: CGPoint(x: offsetX, y: offsetY),
+            scale: fitScale,
+            fittedSessionId: fittedSessionId
+        ))
     }
 
     private func refitFittedSession() {
@@ -289,6 +389,54 @@ struct TerminalCanvasView: View {
 
     private func focusSession(_ session: TerminalSession) {
         SurfaceFocusCoordinator.focus(session)
+    }
+
+    // MARK: - Minimize / Restore
+
+    private func minimizeSession(_ session: TerminalSession) {
+        guard !session.isMinimized,
+              let item = canvasStore.item(for: session.id)
+        else { return }
+        session.isMinimized = true
+        canvasStore.updateMinimized(id: session.id, isMinimized: true)
+
+        let viewport = canvasStore.viewport
+        let scale = max(viewport.scale, 0.1)
+        let slotWidth: CGFloat = 420 / scale
+        let gap: CGFloat = 8 / scale
+
+        // Check if there are already minimized cards to align with
+        let existingMinimizedItems = sessionManager.orderedSessions
+            .filter { $0.isMinimized && $0.id != session.id }
+            .compactMap { canvasStore.item(for: $0.id) }
+
+        // Target screen Y: just below the controls capsule (~48px from top)
+        let minimizedScreenTop: CGFloat = 48
+        let logicalY = viewport.offset.y + (minimizedScreenTop - canvasSize.height / 2) / scale
+
+        // Center horizontally in the visible area
+        let visibleCenterScreenX = overlayLeadingInset + (canvasSize.width - overlayLeadingInset) / 2
+        let logicalCenterX = viewport.offset.x + (visibleCenterScreenX - canvasSize.width / 2) / scale
+
+        var newRect = item.rect
+        if let lastItem = existingMinimizedItems.max(by: { $0.rect.minX < $1.rect.minX }) {
+            newRect.origin.x = lastItem.rect.minX + slotWidth + gap
+            newRect.origin.y = lastItem.rect.minY
+        } else {
+            let totalCount = existingMinimizedItems.count + 1
+            let totalWidth = CGFloat(totalCount) * slotWidth + CGFloat(max(0, totalCount - 1)) * gap
+            newRect.origin.x = logicalCenterX - totalWidth / 2
+            newRect.origin.y = logicalY
+        }
+        canvasStore.updateRect(id: session.id, rect: newRect)
+    }
+
+    private func restoreSession(_ session: TerminalSession) {
+        guard session.isMinimized else { return }
+        session.isMinimized = false
+        canvasStore.updateMinimized(id: session.id, isMinimized: false)
+        fitViewport(to: session)
+        focusSession(session)
     }
 
     private func requestInitialFocusIfNeeded() {
@@ -457,6 +605,7 @@ struct TerminalCanvasView: View {
         guard keyMonitor == nil else { return }
         let store = canvasStore
         let sizeRef = canvasSizeRef
+        let manager = sessionManager
         keyMonitor = EventMonitor(.keyDown) { event in
             let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 .subtracting(.capsLock)
@@ -476,7 +625,22 @@ struct TerminalCanvasView: View {
                 store.setViewport(viewport)
                 return nil
             case "0":
-                store.fitAllViewport(in: sizeRef.size, leadingInset: sizeRef.overlayLeadingInset)
+                NotificationCenter.default.post(name: .terminalFitAllRequested, object: nil)
+                return nil
+            case let c? where c.count == 1 && ("1"..."9").contains(c):
+                let index = Int(c)! - 1
+                let ordered = manager.orderedSessions
+                guard index < ordered.count else { return event }
+                let session = ordered[index]
+                if session.isMinimized {
+                    session.isMinimized = false
+                    store.updateMinimized(id: session.id, isMinimized: false)
+                }
+                NotificationCenter.default.post(
+                    name: .terminalFocusRequested,
+                    object: nil,
+                    userInfo: ["sessionId": session.id]
+                )
                 return nil
             default:
                 return event

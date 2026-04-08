@@ -5,6 +5,8 @@ struct TerminalCanvasCardActions {
     let onFocus: () -> Void
     let onFit: () -> Void
     let onClose: () -> Void
+    let onMinimize: () -> Void
+    let onRestore: () -> Void
     let onInteractionChanged: (Bool) -> Void
     let resolveMove: (_ originalRect: CGRect, _ translation: CGSize) -> CGRect
     let commitMove: (_ rect: CGRect) -> Void
@@ -16,6 +18,7 @@ struct TerminalCanvasCard: View {
     private let cardCornerRadius: CGFloat = 2
 
     @Bindable var session: TerminalSession
+    let displayNumber: Int?
     let logicalRect: CGRect
     let screenRect: CGRect
     let scale: CGFloat
@@ -29,32 +32,44 @@ struct TerminalCanvasCard: View {
         max(44, 48 * scale)
     }
 
+    private var minimizedHeaderHeight: CGFloat { 44 }
+
     private var cardShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
     }
 
+    private var minimizedWidth: CGFloat {
+        min(420, screenRect.width)
+    }
+
     var body: some View {
-        cardSurface(showFitButton: true) {
-            TerminalSplitContentView(session: session)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .topTrailing) {
-                    if let searchState = session.searchState {
-                        TerminalSearchOverlay(
-                            searchState: searchState,
-                            onNavigate: { session.navigateSearch($0) },
-                            onClose: { session.endSearch() }
-                        )
+        if session.isMinimized {
+            minimizedCard
+                .frame(width: minimizedWidth, height: minimizedHeaderHeight)
+                .shadow(color: .black.opacity(0.08), radius: 6, y: 4)
+                .position(x: screenRect.minX + minimizedWidth / 2, y: screenRect.minY + minimizedHeaderHeight / 2)
+                .transaction { $0.animation = nil }
+        } else {
+            cardSurface(showFitButton: true) {
+                TerminalSplitContentView(session: session)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .topTrailing) {
+                        if let searchState = session.searchState {
+                            TerminalSearchOverlay(
+                                searchState: searchState,
+                                onNavigate: { session.navigateSearch($0) },
+                                onClose: { session.endSearch() }
+                            )
+                        }
                     }
-                }
-        }
-        .frame(width: screenRect.width, height: screenRect.height)
-        .overlay {
-            resizeHandles
-        }
-        .shadow(color: .black.opacity(isInteracting ? 0.22 : 0.12), radius: isInteracting ? 18 : 10, y: 8)
-        .position(x: screenRect.midX, y: screenRect.midY)
-        .transaction { transaction in
-            transaction.animation = nil
+            }
+            .frame(width: screenRect.width, height: screenRect.height)
+            .overlay {
+                resizeHandles
+            }
+            .shadow(color: .black.opacity(isInteracting ? 0.22 : 0.12), radius: isInteracting ? 18 : 10, y: 8)
+            .position(x: screenRect.midX, y: screenRect.midY)
+            .transaction { $0.animation = nil }
         }
     }
 
@@ -110,6 +125,52 @@ struct TerminalCanvasCard: View {
         }
     }
 
+    private var minimizedCard: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                nativeDragHandle
+
+                HStack(spacing: 8) {
+                    statusDot
+                    shortcutBadge
+
+                    Text(abbreviatedPath(session.workingDirectory))
+                        .font(.caption2)
+                        .foregroundStyle(theme.secondaryForeground)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Spacer(minLength: 0)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            CardHeaderButton(
+                systemImage: "viewfinder",
+                color: theme.secondaryForeground,
+                action: actions.onRestore
+            )
+            CardHeaderButton(systemImage: "xmark", color: theme.secondaryForeground, action: actions.onClose)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(height: minimizedHeaderHeight)
+        .background(theme.raisedBackground)
+        .clipShape(cardShape)
+        .overlay {
+            cardShape
+                .strokeBorder(borderColor, lineWidth: 1)
+        }
+        .overlay(alignment: .top) {
+            statusBarColor
+                .frame(height: 3)
+                .clipShape(UnevenRoundedRectangle(
+                    topLeadingRadius: cardCornerRadius,
+                    topTrailingRadius: cardCornerRadius
+                ))
+        }
+    }
+
     @ViewBuilder
     private func header(showFitButton: Bool) -> some View {
         HStack(spacing: 8) {
@@ -119,11 +180,8 @@ struct TerminalCanvasCard: View {
                 }
 
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(session.status == .none
-                            ? theme.secondaryForeground.opacity(0.7)
-                            : theme.color(for: session.status))
-                        .frame(width: 8, height: 8)
+                    statusDot
+                    shortcutBadge
 
                     if !session.trackedTasks.isEmpty {
                         TaskProgressIndicator(tasks: session.trackedTasks)
@@ -142,8 +200,14 @@ struct TerminalCanvasCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if showFitButton {
-                CardHeaderButton(systemImage: "viewfinder", color: theme.secondaryForeground, action: actions.onFit)
-                CardHeaderButton(systemImage: "xmark", color: theme.secondaryForeground, action: actions.onClose)
+                CardHeaderButton(
+                    systemImage: "minus",
+                    color: theme.secondaryForeground,
+                    shortcutHint: "⌘⇧M",
+                    action: actions.onMinimize
+                )
+                CardHeaderButton(systemImage: "viewfinder", color: theme.secondaryForeground, shortcutHint: "⌘⇧↩", action: actions.onFit)
+                CardHeaderButton(systemImage: "xmark", color: theme.secondaryForeground, shortcutHint: "⌘W", action: actions.onClose)
             } else {
                 Image(systemName: "viewfinder")
                     .font(.caption)
@@ -198,6 +262,43 @@ struct TerminalCanvasCard: View {
 
     private var interactiveResizeHandles: [TerminalCanvasResizeHandle] {
         TerminalCanvasResizeHandle.allCases
+    }
+
+    // MARK: - Shared Header Components
+
+    private var statusDot: some View {
+        Circle()
+            .fill(session.status == .none
+                ? theme.secondaryForeground.opacity(0.7)
+                : theme.color(for: session.status))
+            .frame(width: 8, height: 8)
+    }
+
+    @ViewBuilder
+    private var shortcutBadge: some View {
+        if let displayNumber, displayNumber <= 9 {
+            Text("⌘\(displayNumber)")
+                .font(.system(size: 9, weight: .medium, design: .rounded).monospacedDigit())
+                .foregroundStyle(theme.secondaryForeground.opacity(0.7))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                        .fill(theme.foreground.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                        .strokeBorder(theme.foreground.opacity(0.1), lineWidth: 0.5)
+                )
+        }
+    }
+
+    private func abbreviatedPath(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
     }
 }
 
@@ -502,6 +603,7 @@ private final class TerminalCanvasNativeHeaderDragView: NSView {
 struct CardHeaderButton: View {
     let systemImage: String
     let color: Color
+    var shortcutHint: String? = nil
     let action: () -> Void
 
     @State private var isHovered = false
@@ -509,13 +611,33 @@ struct CardHeaderButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.caption)
+                .font(.system(size: 10))
                 .scaleEffect(isHovered ? 1.5 : 1.0)
                 .animation(.easeOut(duration: 0.15), value: isHovered)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(color)
         .pointerCursor()
         .onHover { isHovered = $0 }
+        .overlay(alignment: .bottom) {
+            if isHovered, let shortcutHint {
+                Text(shortcutHint)
+                    .font(.caption2)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(.black.opacity(0.75))
+                    )
+                    .fixedSize()
+                    .offset(y: 28)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                    .animation(.easeOut(duration: 0.1), value: isHovered)
+            }
+        }
     }
 }
