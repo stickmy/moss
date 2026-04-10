@@ -1,5 +1,7 @@
 .build/
 Moss.xcodeproj/
 .DS_Store
+.swiftpm/
+xcuserdata/
 Vendor/.build/
 *.dmg
