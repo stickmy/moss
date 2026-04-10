@@ -113,6 +113,35 @@ final class TerminalCanvasStore {
         setViewport(.default)
     }
 
+    func pan(by delta: CGSize) {
+        var viewport = self.viewport
+        viewport.offset.x += delta.width
+        viewport.offset.y += delta.height
+        viewport.fittedSessionId = nil
+        setViewport(viewport)
+    }
+
+    func panTo(offset: CGPoint) {
+        var viewport = self.viewport
+        viewport.offset = offset
+        viewport.fittedSessionId = nil
+        setViewport(viewport)
+    }
+
+    func zoom(by factor: CGFloat) {
+        var viewport = self.viewport
+        viewport.scale = TerminalCanvasMetrics.clampedScale(viewport.scale * factor)
+        viewport.fittedSessionId = nil
+        setViewport(viewport)
+    }
+
+    func zoomTo(scale: CGFloat) {
+        var viewport = self.viewport
+        viewport.scale = TerminalCanvasMetrics.clampedScale(scale)
+        viewport.fittedSessionId = nil
+        setViewport(viewport)
+    }
+
     func nextRectForNewSession(
         focusedSessionId: UUID?,
         layoutHint: TerminalCanvasLayoutHint?
@@ -336,18 +365,45 @@ final class TerminalCanvasStore {
         if let deltaX = bestMoveSnapDelta(
             movingMin: rect.minX,
             movingMax: rect.maxX,
-            targetValues: xSnapTargets(others: others)
+            targetValues: snapTargets(from: others, \.minX, \.maxX)
         ) {
             rect.origin.x += deltaX
         }
         if let deltaY = bestMoveSnapDelta(
             movingMin: rect.minY,
             movingMax: rect.maxY,
-            targetValues: ySnapTargets(others: others)
+            targetValues: snapTargets(from: others, \.minY, \.maxY)
         ) {
             rect.origin.y += deltaY
         }
         return rect
+    }
+
+    private func snapResizeEdge(
+        rect: inout CGRect,
+        targets: [CGFloat],
+        movesMax: Bool,
+        isHorizontal: Bool
+    ) {
+        let currentEdge = movesMax
+            ? (isHorizontal ? rect.maxX : rect.maxY)
+            : (isHorizontal ? rect.minX : rect.minY)
+        guard let snapped = bestEdgeSnapValue(current: currentEdge, targets: targets) else { return }
+
+        if movesMax {
+            if isHorizontal { rect.size.width = snapped - rect.minX }
+            else { rect.size.height = snapped - rect.minY }
+        } else {
+            if isHorizontal {
+                let maxX = rect.maxX
+                rect.origin.x = snapped
+                rect.size.width = maxX - snapped
+            } else {
+                let maxY = rect.maxY
+                rect.origin.y = snapped
+                rect.size.height = maxY - snapped
+            }
+        }
     }
 
     private func snappedResizeRect(
@@ -356,36 +412,13 @@ final class TerminalCanvasStore {
         others: [TerminalCanvasItemSnapshot]
     ) -> CGRect {
         var rect = rect
-        let xTargets = xSnapTargets(others: others)
-        let yTargets = ySnapTargets(others: others)
+        let xTargets = snapTargets(from: others, \.minX, \.maxX)
+        let yTargets = snapTargets(from: others, \.minY, \.maxY)
 
-        if handle.movesMinX,
-           let snapped = bestEdgeSnapValue(current: rect.minX, targets: xTargets)
-        {
-            let maxX = rect.maxX
-            rect.origin.x = snapped
-            rect.size.width = maxX - snapped
-        }
-
-        if handle.movesMaxX,
-           let snapped = bestEdgeSnapValue(current: rect.maxX, targets: xTargets)
-        {
-            rect.size.width = snapped - rect.minX
-        }
-
-        if handle.movesMinY,
-           let snapped = bestEdgeSnapValue(current: rect.minY, targets: yTargets)
-        {
-            let maxY = rect.maxY
-            rect.origin.y = snapped
-            rect.size.height = maxY - snapped
-        }
-
-        if handle.movesMaxY,
-           let snapped = bestEdgeSnapValue(current: rect.maxY, targets: yTargets)
-        {
-            rect.size.height = snapped - rect.minY
-        }
+        if handle.movesMinX { snapResizeEdge(rect: &rect, targets: xTargets, movesMax: false, isHorizontal: true) }
+        if handle.movesMaxX { snapResizeEdge(rect: &rect, targets: xTargets, movesMax: true, isHorizontal: true) }
+        if handle.movesMinY { snapResizeEdge(rect: &rect, targets: yTargets, movesMax: false, isHorizontal: false) }
+        if handle.movesMaxY { snapResizeEdge(rect: &rect, targets: yTargets, movesMax: true, isHorizontal: false) }
 
         return rect
     }
@@ -427,73 +460,53 @@ final class TerminalCanvasStore {
         }
     }
 
-    private func clampedMoveRect(
-        _ rect: CGRect,
+    private func clampResizeEdge(
+        rect: inout CGRect,
         originalRect: CGRect,
-        translation: CGSize,
-        others: [TerminalCanvasItemSnapshot]
-    ) -> CGRect {
-        var rect = rect
-        let yRange = rect.minY...rect.maxY
-        let xRange = rect.minX...rect.maxX
+        others: [TerminalCanvasItemSnapshot],
+        movesMax: Bool,
+        isHorizontal: Bool
+    ) {
+        let perpRange = isHorizontal ? (rect.minY...rect.maxY) : (rect.minX...rect.maxX)
+        let perpRangeOf: (CGRect) -> ClosedRange<CGFloat> = isHorizontal
+            ? { $0.minY...$0.maxY }
+            : { $0.minX...$0.maxX }
+        let candidateEdge: KeyPath<CGRect, CGFloat> = movesMax
+            ? (isHorizontal ? \.minX : \.minY)
+            : (isHorizontal ? \.maxX : \.maxY)
 
-        if translation.width > 0 {
-            let blockers = findBlockers(
-                among: others,
-                perpendicularRange: yRange,
-                perpendicularRangeOf: { $0.minY...$0.maxY },
-                originalEdge: originalRect.maxX,
-                candidateEdge: \.minX,
-                currentEdge: rect.maxX,
-                movingPositive: true
-            )
-            if let limit = blockers.map({ $0.rect.minX - rect.width }).min() {
-                rect.origin.x = min(rect.origin.x, limit)
+        let blockers = findBlockers(
+            among: others,
+            perpendicularRange: perpRange,
+            perpendicularRangeOf: perpRangeOf,
+            originalEdge: movesMax
+                ? (isHorizontal ? originalRect.maxX : originalRect.maxY)
+                : (isHorizontal ? originalRect.minX : originalRect.minY),
+            candidateEdge: candidateEdge,
+            currentEdge: movesMax
+                ? (isHorizontal ? rect.maxX : rect.maxY)
+                : (isHorizontal ? rect.minX : rect.minY),
+            movingPositive: movesMax
+        )
+
+        if movesMax {
+            if let limit = blockers.map({ $0.rect[keyPath: candidateEdge] }).min() {
+                if isHorizontal { rect.size.width = limit - rect.minX }
+                else { rect.size.height = limit - rect.minY }
             }
-        } else if translation.width < 0 {
-            let blockers = findBlockers(
-                among: others,
-                perpendicularRange: yRange,
-                perpendicularRangeOf: { $0.minY...$0.maxY },
-                originalEdge: originalRect.minX,
-                candidateEdge: \.maxX,
-                currentEdge: rect.minX,
-                movingPositive: false
-            )
-            if let limit = blockers.map(\.rect.maxX).max() {
-                rect.origin.x = max(rect.origin.x, limit)
+        } else {
+            if let limit = blockers.map({ $0.rect[keyPath: candidateEdge] }).max() {
+                if isHorizontal {
+                    let maxX = rect.maxX
+                    rect.origin.x = limit
+                    rect.size.width = maxX - limit
+                } else {
+                    let maxY = rect.maxY
+                    rect.origin.y = limit
+                    rect.size.height = maxY - limit
+                }
             }
         }
-
-        if translation.height > 0 {
-            let blockers = findBlockers(
-                among: others,
-                perpendicularRange: xRange,
-                perpendicularRangeOf: { $0.minX...$0.maxX },
-                originalEdge: originalRect.maxY,
-                candidateEdge: \.minY,
-                currentEdge: rect.maxY,
-                movingPositive: true
-            )
-            if let limit = blockers.map({ $0.rect.minY - rect.height }).min() {
-                rect.origin.y = min(rect.origin.y, limit)
-            }
-        } else if translation.height < 0 {
-            let blockers = findBlockers(
-                among: others,
-                perpendicularRange: xRange,
-                perpendicularRangeOf: { $0.minX...$0.maxX },
-                originalEdge: originalRect.minY,
-                candidateEdge: \.maxY,
-                currentEdge: rect.minY,
-                movingPositive: false
-            )
-            if let limit = blockers.map(\.rect.maxY).max() {
-                rect.origin.y = max(rect.origin.y, limit)
-            }
-        }
-
-        return rect
     }
 
     private func clampedResizeRect(
@@ -503,73 +516,10 @@ final class TerminalCanvasStore {
         others: [TerminalCanvasItemSnapshot]
     ) -> CGRect {
         var rect = rect
-        let yRange = rect.minY...rect.maxY
-        let xRange = rect.minX...rect.maxX
-
-        if handle.movesMaxX {
-            let blockers = findBlockers(
-                among: others,
-                perpendicularRange: yRange,
-                perpendicularRangeOf: { $0.minY...$0.maxY },
-                originalEdge: originalRect.maxX,
-                candidateEdge: \.minX,
-                currentEdge: rect.maxX,
-                movingPositive: true
-            )
-            if let limit = blockers.map(\.rect.minX).min() {
-                rect.size.width = limit - rect.minX
-            }
-        }
-
-        if handle.movesMinX {
-            let blockers = findBlockers(
-                among: others,
-                perpendicularRange: yRange,
-                perpendicularRangeOf: { $0.minY...$0.maxY },
-                originalEdge: originalRect.minX,
-                candidateEdge: \.maxX,
-                currentEdge: rect.minX,
-                movingPositive: false
-            )
-            if let limit = blockers.map(\.rect.maxX).max() {
-                let maxX = rect.maxX
-                rect.origin.x = limit
-                rect.size.width = maxX - limit
-            }
-        }
-
-        if handle.movesMaxY {
-            let blockers = findBlockers(
-                among: others,
-                perpendicularRange: xRange,
-                perpendicularRangeOf: { $0.minX...$0.maxX },
-                originalEdge: originalRect.maxY,
-                candidateEdge: \.minY,
-                currentEdge: rect.maxY,
-                movingPositive: true
-            )
-            if let limit = blockers.map(\.rect.minY).min() {
-                rect.size.height = limit - rect.minY
-            }
-        }
-
-        if handle.movesMinY {
-            let blockers = findBlockers(
-                among: others,
-                perpendicularRange: xRange,
-                perpendicularRangeOf: { $0.minX...$0.maxX },
-                originalEdge: originalRect.minY,
-                candidateEdge: \.maxY,
-                currentEdge: rect.minY,
-                movingPositive: false
-            )
-            if let limit = blockers.map(\.rect.maxY).max() {
-                let maxY = rect.maxY
-                rect.origin.y = limit
-                rect.size.height = maxY - limit
-            }
-        }
-
+        if handle.movesMaxX { clampResizeEdge(rect: &rect, originalRect: originalRect, others: others, movesMax: true, isHorizontal: true) }
+        if handle.movesMinX { clampResizeEdge(rect: &rect, originalRect: originalRect, others: others, movesMax: false, isHorizontal: true) }
+        if handle.movesMaxY { clampResizeEdge(rect: &rect, originalRect: originalRect, others: others, movesMax: true, isHorizontal: false) }
+        if handle.movesMinY { clampResizeEdge(rect: &rect, originalRect: originalRect, others: others, movesMax: false, isHorizontal: false) }
         return rect
     }
 
@@ -652,22 +602,11 @@ final class TerminalCanvasStore {
         others.contains { $0.rect.intersects(rect) }
     }
 
-    private func xSnapTargets(others: [TerminalCanvasItemSnapshot]) -> [CGFloat] {
-        var values: [CGFloat] = []
-        for item in others {
-            values.append(item.rect.minX)
-            values.append(item.rect.maxX)
-        }
-        return values
-    }
-
-    private func ySnapTargets(others: [TerminalCanvasItemSnapshot]) -> [CGFloat] {
-        var values: [CGFloat] = []
-        for item in others {
-            values.append(item.rect.minY)
-            values.append(item.rect.maxY)
-        }
-        return values
+    private func snapTargets(
+        from others: [TerminalCanvasItemSnapshot],
+        _ keyPaths: KeyPath<CGRect, CGFloat>...
+    ) -> [CGFloat] {
+        others.flatMap { item in keyPaths.map { item.rect[keyPath: $0] } }
     }
 
     private func bestMoveSnapDelta(

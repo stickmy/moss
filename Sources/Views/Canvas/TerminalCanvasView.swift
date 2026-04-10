@@ -25,7 +25,7 @@ struct TerminalCanvasView: View {
     @State private var keyMonitor: EventMonitor?
     @State private var canvasHover = CanvasHoverRef()
     @State private var canvasSizeRef = CanvasSizeRef()
-    @State private var zoomRestoreViewport: TerminalCanvasViewport?
+    @State private var zoomRestoreRect: (sessionId: UUID, rect: CGRect)?
 
     private var canvasStore: TerminalCanvasStore { sessionManager.canvasStore }
 
@@ -57,7 +57,7 @@ struct TerminalCanvasView: View {
                             isInteracting: interactingSessionId == session.id,
                             actions: TerminalCanvasCardActions(
                                 onFocus: { focusSession(session) },
-                                onFit: { fitViewport(to: session) },
+                                onFit: { toggleFocusSession(session) },
                                 onClose: { sessionManager.removeSession(session) },
                                 onMinimize: { minimizeSession(session) },
                                 onRestore: { restoreSession(session) },
@@ -123,6 +123,7 @@ struct TerminalCanvasView: View {
             .onChange(of: overlayLeadingInset) { _, newValue in
                 canvasSizeRef.overlayLeadingInset = newValue
                 refitFittedSession()
+                refitFocusedSessionIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: .terminalNewRequested)) { _ in
                 createNewSession()
@@ -158,18 +159,11 @@ struct TerminalCanvasView: View {
                 }
 
                 guard let panStartOffset else { return }
-                let delta = CGSize(
-                    width: value.translation.width / max(canvasStore.viewport.scale, 0.1),
-                    height: value.translation.height / max(canvasStore.viewport.scale, 0.1)
-                )
-
-                var viewport = canvasStore.viewport
-                viewport.offset = CGPoint(
-                    x: panStartOffset.x - delta.width,
-                    y: panStartOffset.y - delta.height
-                )
-                viewport.fittedSessionId = nil
-                canvasStore.setViewport(viewport)
+                let scale = max(canvasStore.viewport.scale, 0.1)
+                canvasStore.panTo(offset: CGPoint(
+                    x: panStartOffset.x - value.translation.width / scale,
+                    y: panStartOffset.y - value.translation.height / scale
+                ))
             }
             .onEnded { _ in
                 panStartOffset = nil
@@ -184,8 +178,7 @@ struct TerminalCanvasView: View {
                 }
 
                 guard let zoomStartScale else { return }
-                let newScale = zoomStartScale * value
-                setScale(newScale)
+                canvasStore.zoomTo(scale: zoomStartScale * value)
             }
             .onEnded { _ in
                 zoomStartScale = nil
@@ -211,8 +204,8 @@ struct TerminalCanvasView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(sessionManager.theme.secondaryForeground)
 
-            CanvasControlButton(systemImage: "minus", shortcutHint: "⌘−", action: { zoom(by: 0.9) })
-            CanvasControlButton(systemImage: "plus", shortcutHint: "⌘+", action: { zoom(by: 1.1) })
+            CanvasControlButton(systemImage: "minus", shortcutHint: "⌘−", action: { canvasStore.zoom(by: 0.9) })
+            CanvasControlButton(systemImage: "plus", shortcutHint: "⌘+", action: { canvasStore.zoom(by: 1.1) })
             CanvasControlButton(systemImage: "square.grid.2x2", shortcutHint: "⌘0", action: {
                 fitAll()
             })
@@ -270,21 +263,59 @@ struct TerminalCanvasView: View {
 
     private func fitFocusedSession() {
         guard let target = currentFocusTarget else { return }
-        fitViewport(to: target)
+        toggleFocusSession(target)
     }
 
     private func toggleZoomFocusedSession() {
         guard let target = currentFocusTarget else { return }
+        toggleFocusSession(target)
+    }
 
-        if let restore = zoomRestoreViewport {
-            // Restore previous viewport
-            zoomRestoreViewport = nil
-            canvasStore.setViewport(restore)
-        } else {
-            // Save current viewport, then fit
-            zoomRestoreViewport = canvasStore.viewport
-            fitViewport(to: target)
+    private func toggleFocusSession(_ session: TerminalSession) {
+        // If this session is already expanded, restore its original rect
+        if let restore = zoomRestoreRect, restore.sessionId == session.id {
+            zoomRestoreRect = nil
+            canvasStore.updateRect(id: session.id, rect: restore.rect)
+            return
         }
+
+        guard let item = canvasStore.item(for: session.id) else { return }
+
+        // Save original rect for restore
+        zoomRestoreRect = (sessionId: session.id, rect: item.rect)
+        expandSessionToFillViewport(session)
+    }
+
+    private func expandSessionToFillViewport(_ session: TerminalSession) {
+        // Reserve top space for minimized row if needed
+        let hasMinimized = sessionManager.orderedSessions.contains(where: { $0.isMinimized && $0.id != session.id })
+        let topReserved: CGFloat = hasMinimized ? TerminalCanvasMetrics.topReserved : TerminalCanvasMetrics.fitPadding
+
+        // Compute the logical rect that fills the viewport at current scale
+        let scale = max(canvasStore.viewport.scale, 0.1)
+        let visibleWidth = max(1, canvasSize.width - overlayLeadingInset)
+        let padding = TerminalCanvasMetrics.fitPadding
+        let logicalWidth = (visibleWidth - padding * 2) / scale
+        let logicalHeight = (canvasSize.height - topReserved - padding) / scale
+
+        // Pin top edge at topReserved, matching fitViewportToRect
+        let topY = canvasStore.viewport.offset.y - (canvasSize.height / 2 - topReserved) / scale
+        let newRect = CGRect(
+            x: canvasStore.viewport.offset.x - logicalWidth / 2 + overlayLeadingInset / (2 * scale),
+            y: topY,
+            width: max(logicalWidth, TerminalCanvasMetrics.minCardSize.width),
+            height: max(logicalHeight, TerminalCanvasMetrics.minCardSize.height)
+        )
+
+        canvasStore.updateRect(id: session.id, rect: newRect)
+        focusSession(session)
+    }
+
+    private func refitFocusedSessionIfNeeded() {
+        guard let restore = zoomRestoreRect,
+              let session = sessionManager.orderedSessions.first(where: { $0.id == restore.sessionId })
+        else { return }
+        expandSessionToFillViewport(session)
     }
 
     private func fitViewport(to session: TerminalSession) {
@@ -309,7 +340,24 @@ struct TerminalCanvasView: View {
         }
 
         if nonMinimizedSessions.isEmpty {
-            canvasStore.fitAllViewport(in: canvasSize, leadingInset: overlayLeadingInset)
+            // All minimized: reset viewport and center minimized row at top
+            let viewport = TerminalCanvasViewport.default
+            let rowMetrics = MinimizedRowMetrics(
+                scale: viewport.scale,
+                offsetY: viewport.offset.y,
+                canvasHeight: canvasSize.height
+            )
+            let visibleCenterX = overlayLeadingInset + (canvasSize.width - overlayLeadingInset) / 2
+            let logicalCenterX = viewport.offset.x + (visibleCenterX - canvasSize.width / 2) / viewport.scale
+            let startX = rowMetrics.centeredStartX(count: minimizedSessions.count, centerX: logicalCenterX)
+
+            for (i, session) in minimizedSessions.enumerated() {
+                guard var rect = canvasStore.item(for: session.id)?.rect else { continue }
+                rect.origin.x = startX + CGFloat(i) * (rowMetrics.slotWidth + rowMetrics.gap)
+                rect.origin.y = rowMetrics.logicalY
+                canvasStore.updateRect(id: session.id, rect: rect)
+            }
+            canvasStore.setViewport(viewport)
             return
         }
 
@@ -335,14 +383,7 @@ struct TerminalCanvasView: View {
     ) {
         let visibleWidth = max(1, canvasSize.width - overlayLeadingInset)
         let padding = TerminalCanvasMetrics.fitPadding
-
-        // Screen layout (top → bottom):
-        //   ~40px  controls capsule
-        //    ~8px  gap
-        //   ~48px  minimized cards row
-        //   ~16px  gap
-        //   rest   content
-        let topReserved: CGFloat = 112
+        let topReserved = TerminalCanvasMetrics.topReserved
 
         let availableWidth = max(1, visibleWidth - padding * 2)
         let availableHeight = max(1, canvasSize.height - topReserved - padding)
@@ -356,20 +397,14 @@ struct TerminalCanvasView: View {
         let offsetX = contentRect.midX - overlayLeadingInset / (2 * fitScale)
         let offsetY = contentRect.minY - (topReserved - canvasSize.height / 2) / fitScale
 
-        // Position minimized cards centered in the reserved area (screen Y ≈ 48)
-        let minimizedScreenTop: CGFloat = 48
-        let minimizedLogicalY = offsetY + (minimizedScreenTop - canvasSize.height / 2) / fitScale
-
-        let minimizedSlotWidth = 420 / fitScale
-        let gap: CGFloat = 8 / fitScale
-        let totalWidth = CGFloat(minimizedSessions.count) * minimizedSlotWidth
-            + CGFloat(max(0, minimizedSessions.count - 1)) * gap
-        let startX = contentRect.midX - totalWidth / 2
+        // Position minimized cards centered in the reserved area
+        let rowMetrics = MinimizedRowMetrics(scale: fitScale, offsetY: offsetY, canvasHeight: canvasSize.height)
+        let startX = rowMetrics.centeredStartX(count: minimizedSessions.count, centerX: contentRect.midX)
 
         for (i, minSession) in minimizedSessions.enumerated() {
             guard var rect = canvasStore.item(for: minSession.id)?.rect else { continue }
-            rect.origin.x = startX + CGFloat(i) * (minimizedSlotWidth + gap)
-            rect.origin.y = minimizedLogicalY
+            rect.origin.x = startX + CGFloat(i) * (rowMetrics.slotWidth + rowMetrics.gap)
+            rect.origin.y = rowMetrics.logicalY
             canvasStore.updateRect(id: minSession.id, rect: rect)
         }
 
@@ -401,32 +436,27 @@ struct TerminalCanvasView: View {
         canvasStore.updateMinimized(id: session.id, isMinimized: true)
 
         let viewport = canvasStore.viewport
-        let scale = max(viewport.scale, 0.1)
-        let slotWidth: CGFloat = 420 / scale
-        let gap: CGFloat = 8 / scale
+        let rowMetrics = MinimizedRowMetrics(
+            scale: viewport.scale,
+            offsetY: viewport.offset.y,
+            canvasHeight: canvasSize.height
+        )
 
         // Check if there are already minimized cards to align with
         let existingMinimizedItems = sessionManager.orderedSessions
             .filter { $0.isMinimized && $0.id != session.id }
             .compactMap { canvasStore.item(for: $0.id) }
 
-        // Target screen Y: just below the controls capsule (~48px from top)
-        let minimizedScreenTop: CGFloat = 48
-        let logicalY = viewport.offset.y + (minimizedScreenTop - canvasSize.height / 2) / scale
-
-        // Center horizontally in the visible area
-        let visibleCenterScreenX = overlayLeadingInset + (canvasSize.width - overlayLeadingInset) / 2
-        let logicalCenterX = viewport.offset.x + (visibleCenterScreenX - canvasSize.width / 2) / scale
-
         var newRect = item.rect
         if let lastItem = existingMinimizedItems.max(by: { $0.rect.minX < $1.rect.minX }) {
-            newRect.origin.x = lastItem.rect.minX + slotWidth + gap
+            newRect.origin.x = lastItem.rect.minX + rowMetrics.slotWidth + rowMetrics.gap
             newRect.origin.y = lastItem.rect.minY
         } else {
-            let totalCount = existingMinimizedItems.count + 1
-            let totalWidth = CGFloat(totalCount) * slotWidth + CGFloat(max(0, totalCount - 1)) * gap
-            newRect.origin.x = logicalCenterX - totalWidth / 2
-            newRect.origin.y = logicalY
+            let scale = max(viewport.scale, 0.1)
+            let visibleCenterScreenX = overlayLeadingInset + (canvasSize.width - overlayLeadingInset) / 2
+            let logicalCenterX = viewport.offset.x + (visibleCenterScreenX - canvasSize.width / 2) / scale
+            newRect.origin.x = rowMetrics.centeredStartX(count: 1, centerX: logicalCenterX)
+            newRect.origin.y = rowMetrics.logicalY
         }
         canvasStore.updateRect(id: session.id, rect: newRect)
     }
@@ -489,17 +519,6 @@ struct TerminalCanvasView: View {
         }
     }
 
-    private func zoom(by factor: CGFloat) {
-        setScale(canvasStore.viewport.scale * factor)
-    }
-
-    private func setScale(_ scale: CGFloat) {
-        var viewport = canvasStore.viewport
-        viewport.scale = TerminalCanvasMetrics.clampedScale(scale)
-        viewport.fittedSessionId = nil
-        canvasStore.setViewport(viewport)
-    }
-
     private func zIndex(
         for session: TerminalSession,
         item: TerminalCanvasItemSnapshot
@@ -543,11 +562,7 @@ struct TerminalCanvasView: View {
             if event.modifierFlags.contains(.command) {
                 let dy = event.scrollingDeltaY
                 let sensitivity: CGFloat = event.hasPreciseScrollingDeltas ? 0.005 : 0.03
-                let factor = 1 + dy * sensitivity
-                var viewport = store.viewport
-                viewport.scale = TerminalCanvasMetrics.clampedScale(viewport.scale * factor)
-                viewport.fittedSessionId = nil
-                store.setViewport(viewport)
+                store.zoom(by: 1 + dy * sensitivity)
                 return nil
             }
 
@@ -574,11 +589,7 @@ struct TerminalCanvasView: View {
                 dy *= 20
             }
             let scale = max(store.viewport.scale, 0.1)
-            var viewport = store.viewport
-            viewport.offset.x -= dx / scale
-            viewport.offset.y -= dy / scale
-            viewport.fittedSessionId = nil
-            store.setViewport(viewport)
+            store.pan(by: CGSize(width: -dx / scale, height: -dy / scale))
 
             return nil
         }
@@ -590,13 +601,7 @@ struct TerminalCanvasView: View {
         let hover = canvasHover
         magnifyMonitor = EventMonitor(.magnify) { event in
             guard hover.isHovered else { return event }
-
-            var viewport = store.viewport
-            let newScale = viewport.scale * (1 + event.magnification)
-            viewport.scale = TerminalCanvasMetrics.clampedScale(newScale)
-            viewport.fittedSessionId = nil
-            store.setViewport(viewport)
-
+            store.zoom(by: 1 + event.magnification)
             return nil
         }
     }
@@ -613,16 +618,10 @@ struct TerminalCanvasView: View {
 
             switch event.charactersIgnoringModifiers {
             case "=", "+":
-                var viewport = store.viewport
-                viewport.scale = TerminalCanvasMetrics.clampedScale(viewport.scale * 1.1)
-                viewport.fittedSessionId = nil
-                store.setViewport(viewport)
+                store.zoom(by: 1.1)
                 return nil
             case "-":
-                var viewport = store.viewport
-                viewport.scale = TerminalCanvasMetrics.clampedScale(viewport.scale / 1.1)
-                viewport.fittedSessionId = nil
-                store.setViewport(viewport)
+                store.zoom(by: 1.0 / 1.1)
                 return nil
             case "0":
                 NotificationCenter.default.post(name: .terminalFitAllRequested, object: nil)
@@ -693,5 +692,25 @@ private struct CanvasControlButton: View {
                     .animation(.easeOut(duration: 0.1), value: isHovered)
             }
         }
+    }
+}
+
+// MARK: - Minimized Row Metrics
+
+private struct MinimizedRowMetrics {
+    let slotWidth: CGFloat
+    let gap: CGFloat
+    let logicalY: CGFloat
+
+    init(scale: CGFloat, offsetY: CGFloat, canvasHeight: CGFloat) {
+        let s = max(scale, 0.1)
+        self.slotWidth = TerminalCanvasMetrics.minimizedSlotWidth / s
+        self.gap = TerminalCanvasMetrics.minimizedGap / s
+        self.logicalY = offsetY + (TerminalCanvasMetrics.minimizedRowScreenY - canvasHeight / 2) / s
+    }
+
+    func centeredStartX(count: Int, centerX: CGFloat) -> CGFloat {
+        let totalWidth = CGFloat(count) * slotWidth + CGFloat(max(0, count - 1)) * gap
+        return centerX - totalWidth / 2
     }
 }

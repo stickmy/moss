@@ -38,6 +38,10 @@ enum TerminalCanvasMetrics {
     static let minCardSize = CGSize(width: 480, height: 320)
     static let spawnOffset = CGPoint(x: 120, y: 90)
     static let fitPadding: CGFloat = 48
+    static let minimizedRowScreenY: CGFloat = 48
+    static let minimizedSlotWidth: CGFloat = 420
+    static let minimizedGap: CGFloat = 8
+    static let topReserved: CGFloat = 112
     static let minScale: CGFloat = 0.1
     static let maxScale: CGFloat = 1.8
 
